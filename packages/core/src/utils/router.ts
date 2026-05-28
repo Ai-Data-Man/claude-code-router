@@ -1,6 +1,7 @@
 import { get_encoding } from "tiktoken";
 import { sessionUsageCache, Usage } from "./cache";
 import { readFile } from "fs/promises";
+import { execSync } from "child_process";
 import { opendir, stat } from "fs/promises";
 import { join } from "path";
 import { CLAUDE_PROJECTS_DIR, HOME_DIR } from "@CCR/shared";
@@ -152,14 +153,10 @@ const getProjectSpecificRouter = async (
     req.log?.debug({ sessionId: req.sessionId, project }, "Resolved project folder from session");
     if (project) {
       const projectConfigPath = join(HOME_DIR, project, "config.json");
-      const sessionConfigPath = join(
-        HOME_DIR,
-        project,
-        `${req.sessionId}.json`
-      );
+      const sessionConfigPath = join(HOME_DIR, project, `${req.sessionId}.json`);
 
       req.log?.debug(
-        { sessionId: req.sessionId, project, sessionConfigPath, projectConfigPath },
+        { sessionId: req.sessionId, sessionConfigPath, projectConfigPath },
         "Attempting to load scoped router config files"
       );
 
@@ -167,22 +164,22 @@ const getProjectSpecificRouter = async (
       try {
         const sessionConfig = JSON.parse(await readFile(sessionConfigPath, "utf8"));
         if (sessionConfig && sessionConfig.Router) {
-          req.log?.debug({ sessionId: req.sessionId, project, sessionConfigPath, router: sessionConfig.Router }, "Using session scoped router config");
+          req.log?.debug({ sessionId: req.sessionId, sessionConfigPath, router: sessionConfig.Router }, "Using session scoped router config");
           return sessionConfig.Router;
         }
-        req.log?.debug({ sessionId: req.sessionId, project, sessionConfigPath }, "Session scoped config loaded but Router missing");
+        req.log?.debug({ sessionId: req.sessionId, sessionConfigPath }, "Session scoped config loaded but Router missing");
       } catch (error: any) {
-        req.log?.debug({ sessionId: req.sessionId, project, sessionConfigPath, error: error?.message }, "Failed to load session scoped config");
+        req.log?.debug({ sessionId: req.sessionId, sessionConfigPath, error: error?.message }, "Failed to load session scoped config");
       }
       try {
         const projectConfig = JSON.parse(await readFile(projectConfigPath, "utf8"));
         if (projectConfig && projectConfig.Router) {
-          req.log?.debug({ sessionId: req.sessionId, project, projectConfigPath, router: projectConfig.Router }, "Using project scoped router config");
+          req.log?.debug({ sessionId: req.sessionId, projectConfigPath, router: projectConfig.Router }, "Using project scoped router config");
           return projectConfig.Router;
         }
-        req.log?.debug({ sessionId: req.sessionId, project, projectConfigPath }, "Project scoped config loaded but Router missing");
+        req.log?.debug({ sessionId: req.sessionId, projectConfigPath }, "Project scoped config loaded but Router missing");
       } catch (error: any) {
-        req.log?.debug({ sessionId: req.sessionId, project, projectConfigPath, error: error?.message }, "Failed to load project scoped config");
+        req.log?.debug({ sessionId: req.sessionId, projectConfigPath, error: error?.message }, "Failed to load project scoped config");
       }
     }
   }
@@ -212,10 +209,10 @@ const getUseModel = async (
   if (req.body.model.includes(",")) {
     const [provider, model] = req.body.model.split(",");
     const finalProvider = providers.find(
-      (p: any) => p.name.toLowerCase() === provider
+      (p: any) => typeof p.name === 'string' && p.name.toLowerCase() === provider
     );
     const finalModel = finalProvider?.models?.find(
-      (m: any) => m.toLowerCase() === model
+      (m: any) => typeof m === 'string' && m.toLowerCase() === model
     );
     if (finalProvider && finalModel) {
       return { model: `${finalProvider.name},${finalModel}`, scenarioType: 'default' };
@@ -389,12 +386,96 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
   return;
 };
 
-// Memory cache for sessionId to project name mapping
+// Memory cache for sessionId to project directory path mapping
 // null value indicates previously searched but not found
 // Uses LRU cache with max 1000 entries
 const sessionProjectCache = new LRUCache<string, string>({
   max: 1000,
 });
+
+// Parse output of `wsl -l -q` into distro names
+const getWSLDistros = (): string[] => {
+  if (process.platform !== "win32") return [];
+  try {
+    const output = execSync("wsl -l -q", { encoding: "utf-8", timeout: 5000 });
+    return output
+      .split(/\r?\n/)
+      .map((d) => d.trim())
+      .filter((d) => d.length > 0);
+  } catch {
+    return [];
+  }
+};
+
+// Resolve .claude/projects path for a WSL distro
+const getWslProjectsDir = (distro: string): string | null => {
+  try {
+    const homeOutput = execSync(
+      `wsl -d "${distro}" sh -c 'echo $HOME'`,
+      { encoding: "utf-8", timeout: 5000 }
+    );
+    const home = homeOutput.trim().replace(/\//g, "\\");
+    // WSL home like /home/user -> \\wsl$\distro\home\user
+    // Or /root -> \\wsl$\distro\root
+    if (!home || home === "") return null;
+    const uncBase = home.startsWith("\\home\\") || home.startsWith("\\root\\")
+      ? `\\\\wsl$\\${distro}\\${home.slice(1)}`
+      : `\\\\wsl$\\${distro}\\${home.replace(/^\\/, "")}`;
+    return join(uncBase, ".claude", "projects");
+  } catch {
+    return null;
+  }
+};
+
+// Core search: look for sessionId.jsonl in a given base directory
+// Returns the full path to the project folder if found
+const searchInDir = async (
+  baseDir: string,
+  sessionId: string,
+  logger?: { debug?: (...args: any[]) => void; error?: (...args: any[]) => void }
+): Promise<string | null> => {
+  let dirHandle;
+  try {
+    dirHandle = await opendir(baseDir);
+  } catch (error: any) {
+    logger?.debug?.({ baseDir, error: error?.message }, "Cannot open directory for session search");
+    return null;
+  }
+
+  try {
+    const folderNames: string[] = [];
+    for await (const dirent of dirHandle) {
+      if (dirent.isDirectory()) {
+        folderNames.push(dirent.name);
+      }
+    }
+
+    logger?.debug?.(
+      { baseDir, folderCount: folderNames.length },
+      "Collected project folders for session lookup"
+    );
+
+    const checkPromises = folderNames.map(async (folderName) => {
+      const sessionFilePath = join(baseDir, folderName, `${sessionId}.jsonl`);
+      try {
+        const fileStat = await stat(sessionFilePath);
+        return fileStat.isFile() ? folderName : null;
+      } catch {
+        return null;
+      }
+    });
+
+    const results = await Promise.all(checkPromises);
+    for (const result of results) {
+      if (result) {
+        return result;
+      }
+    }
+  } finally {
+    await dirHandle.close();
+  }
+  return null;
+};
 
 export const searchProjectBySession = async (
   sessionId: string,
@@ -404,7 +485,7 @@ export const searchProjectBySession = async (
   if (sessionProjectCache.has(sessionId)) {
     const result = sessionProjectCache.get(sessionId);
     logger?.debug?.({ sessionId, cacheHit: true, cachedProject: result || null }, "Resolved project folder from session cache");
-    if (!result || result === '') {
+    if (!result || result === "") {
       return null;
     }
     return result;
@@ -412,56 +493,46 @@ export const searchProjectBySession = async (
 
   logger?.debug?.({ sessionId, cacheHit: false, claudeProjectsDir: CLAUDE_PROJECTS_DIR }, "Searching project folder by session id");
 
+  // Collect all base directories to search
+  const searchDirs: string[] = [CLAUDE_PROJECTS_DIR];
+
+  // On Windows, also try WSL distributions
+  if (process.platform === "win32") {
+    const distros = getWSLDistros();
+    for (const distro of distros) {
+      const wslProjectsDir = getWslProjectsDir(distro);
+      if (wslProjectsDir) {
+        searchDirs.push(wslProjectsDir);
+      }
+    }
+  }
+
+  logger?.debug?.({ sessionId, searchDirs }, "Searching for session across directories");
+
+  // Search all directories concurrently
+  const searchPromises = searchDirs.map(async (baseDir) => {
+    const found = await searchInDir(baseDir, sessionId, logger);
+    return found;
+  });
+
   try {
-    const dir = await opendir(CLAUDE_PROJECTS_DIR);
-    const folderNames: string[] = [];
-
-    // Collect all folder names
-    for await (const dirent of dir) {
-      if (dirent.isDirectory()) {
-        folderNames.push(dirent.name);
+    const results = await Promise.all(searchPromises);
+    for (const folderName of results) {
+      if (folderName) {
+        sessionProjectCache.set(sessionId, folderName);
+        logger?.debug?.({ sessionId, project: folderName }, "Found project folder containing session transcript");
+        return folderName;
       }
     }
 
-    logger?.debug?.({ sessionId, claudeProjectsDir: CLAUDE_PROJECTS_DIR, folderCount: folderNames.length }, "Collected Claude project folders for session lookup");
-
-    // Concurrently check each project folder for sessionId.jsonl file
-    const checkPromises = folderNames.map(async (folderName) => {
-      const sessionFilePath = join(
-        CLAUDE_PROJECTS_DIR,
-        folderName,
-        `${sessionId}.jsonl`
-      );
-      try {
-        const fileStat = await stat(sessionFilePath);
-        return fileStat.isFile() ? folderName : null;
-      } catch {
-        // File does not exist, continue checking next
-        return null;
-      }
-    });
-
-    const results = await Promise.all(checkPromises);
-
-    // Return the first existing project directory name
-    for (const result of results) {
-      if (result) {
-        // Cache the found result
-        sessionProjectCache.set(sessionId, result);
-        logger?.debug?.({ sessionId, project: result }, "Found project folder containing session transcript");
-        return result;
-      }
-    }
-
-    // Cache not found result (null value means previously searched but not found)
-    sessionProjectCache.set(sessionId, '');
-    logger?.debug?.({ sessionId, claudeProjectsDir: CLAUDE_PROJECTS_DIR }, "No project folder contains the requested session transcript");
-    return null; // No matching project found
+    // Cache not found result
+    sessionProjectCache.set(sessionId, "");
+    logger?.debug?.({ sessionId, searchDirs }, "No project folder contains the requested session transcript");
+    return null;
   } catch (error: any) {
-    logger?.error?.({ sessionId, claudeProjectsDir: CLAUDE_PROJECTS_DIR, error: error?.message }, "Error searching for project by session");
+    logger?.error?.({ sessionId, error: error?.message }, "Error searching for project by session");
     console.error("Error searching for project by session:", error);
-    // Cache null result on error to avoid repeated errors
-    sessionProjectCache.set(sessionId, '');
+    sessionProjectCache.set(sessionId, "");
     return null;
   }
 };

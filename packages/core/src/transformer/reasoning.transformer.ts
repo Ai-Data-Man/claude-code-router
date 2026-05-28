@@ -27,6 +27,32 @@ export class ReasoningTransformer implements Transformer {
       };
       request.enable_thinking = true;
     }
+
+    // DeepSeek and other providers require reasoning_content to be passed
+    // back in assistant messages for thinking-enabled conversations.
+    // Convert UnifiedMessage.thinking into a reasoning_content field
+    // so JSON serialization produces the format DeepSeek expects:
+    // {"role":"assistant","content":"...","reasoning_content":"..."}
+    const isThinkingEnabled = request.enable_thinking === true ||
+      (request.thinking && (request.thinking as any).type === "enabled");
+
+    request.messages
+      .filter((msg) => msg.role === "assistant")
+      .forEach((message) => {
+        if (message.thinking && message.thinking.content) {
+          (message as any).reasoning_content = message.thinking.content;
+          delete message.thinking;
+        } else if (isThinkingEnabled) {
+          // DeepSeek requires reasoning_content in ALL assistant messages
+          // when thinking is enabled, even if it's empty
+          if (!("reasoning_content" in message)) {
+            (message as any).reasoning_content =
+              (message.thinking && message.thinking.content) || "";
+          }
+          delete message.thinking;
+        }
+      });
+
     return request;
   }
 
@@ -93,8 +119,6 @@ export class ReasoningTransformer implements Transformer {
             if (line.startsWith("data: ") && line.trim() !== "data: [DONE]") {
               try {
                 const data = JSON.parse(line.slice(6));
-                console.log(JSON.stringify(data))
-
                 // Extract reasoning_content from delta
                 if (data.choices?.[0]?.delta?.reasoning_content) {
                   context.appendReasoningContent(
@@ -132,14 +156,13 @@ export class ReasoningTransformer implements Transformer {
                   context.setReasoningComplete(true);
                   const signature = Date.now().toString();
 
-                  // Create a new chunk with thinking block
+                  // Create a new chunk with thinking block (no tool_calls)
                   const thinkingChunk = {
                     ...data,
                     choices: [
                       {
                         ...data.choices[0],
                         delta: {
-                          ...data.choices[0].delta,
                           content: null,
                           thinking: {
                             content: context.reasoningContent(),
@@ -149,7 +172,6 @@ export class ReasoningTransformer implements Transformer {
                       },
                     ],
                   };
-                  delete thinkingChunk.choices[0].delta.reasoning_content;
                   // Send the thinking chunk
                   const thinkingLine = `data: ${JSON.stringify(
                     thinkingChunk
@@ -166,7 +188,7 @@ export class ReasoningTransformer implements Transformer {
                   data.choices?.[0]?.delta &&
                   Object.keys(data.choices[0].delta).length > 0
                 ) {
-                  if (context.isReasoningComplete()) {
+                  if (context.isReasoningComplete() && data.choices[0].delta.content) {
                     data.choices[0].index++;
                   }
                   const modifiedLine = `data: ${JSON.stringify(data)}\n\n`;

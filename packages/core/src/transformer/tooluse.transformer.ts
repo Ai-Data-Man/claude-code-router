@@ -13,7 +13,16 @@ Before invoking a tool, you must carefully evaluate whether it matches the curre
 Always prioritize completing the user's task effectively and efficiently by using tools whenever appropriate.</system-reminder>`,
     });
     if (request.tools?.length) {
-      request.tool_choice = "required";
+      // Avoid setting tool_choice="required" when thinking is enabled,
+      // as some providers (e.g. Anthropic) reject this combination.
+      // Check both request.thinking (set directly) and request.reasoning
+      // (set by anthropic transformer when converting incoming thinking).
+      const thinkingEnabled =
+        request.thinking?.type === "enabled" ||
+        request.reasoning?.enabled === true;
+      if (!thinkingEnabled) {
+        request.tool_choice = "required";
+      }
       request.tools.push({
         type: "function",
         function: {
