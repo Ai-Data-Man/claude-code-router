@@ -112,6 +112,7 @@ export interface Config {
   // Top-level settings
   LOG: boolean;
   LOG_LEVEL: string;
+  LOG_MAX_SIZE?: string;
   CLAUDE_PATH: string;
   HOST: string;
   PORT: number;

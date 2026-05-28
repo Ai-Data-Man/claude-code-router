@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { writeFile } from "fs/promises";
+import { writeFile, readdir, stat, unlink } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
 import { initConfig, initDir } from "./utils";
@@ -42,6 +42,50 @@ async function initializeClaudeConfig() {
 interface RunOptions {
   port?: number;
   logger?: any;
+}
+
+function parseSizeToBytes(value: string): number {
+  const match = /^\s*(\d+)\s*([BKMG])\s*$/i.exec(value || "");
+  if (!match) return 200 * 1024 * 1024;
+  const num = Number(match[1]);
+  const unit = match[2].toUpperCase();
+  if (unit === "B") return num;
+  if (unit === "K") return num * 1024;
+  if (unit === "M") return num * 1024 * 1024;
+  return num * 1024 * 1024 * 1024;
+}
+
+async function trimRotatedLogsByTotalSize(maxSize: string): Promise<void> {
+  const limitBytes = parseSizeToBytes(maxSize);
+  const logDir = join(HOME_DIR, "logs");
+
+  let entries: Array<{ path: string; size: number; mtimeMs: number }> = [];
+  try {
+    const files = await readdir(logDir);
+    for (const name of files) {
+      if (!/^ccr-.*\.log$/i.test(name)) continue;
+      const fullPath = join(logDir, name);
+      try {
+        const s = await stat(fullPath);
+        if (!s.isFile()) continue;
+        entries.push({ path: fullPath, size: s.size, mtimeMs: s.mtimeMs });
+      } catch {}
+    }
+  } catch {
+    return;
+  }
+
+  entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  let total = entries.reduce((sum, item) => sum + item.size, 0);
+  if (total <= limitBytes) return;
+
+  for (let i = entries.length - 1; i >= 0 && total > limitBytes; i--) {
+    const target = entries[i];
+    try {
+      await unlink(target.path);
+      total -= target.size;
+    } catch {}
+  }
 }
 
 /**
@@ -139,6 +183,15 @@ async function getServer(options: RunOptions = {}) {
 
   let loggerConfig: any;
 
+  // Parse log max size config, default to "200M"
+  const logMaxSize = config.LOG_MAX_SIZE || "200M";
+
+  // Trim existing rotated logs on startup to prevent historical bloat
+  await trimRotatedLogsByTotalSize(logMaxSize);
+
+  // Use a stable history file name so maxSize cleanup works across restarts
+  const logHistoryFile = "ccr-rotate-history.txt";
+
   // Use external logger configuration if provided
   if (options.logger !== undefined) {
     loggerConfig = options.logger;
@@ -153,10 +206,11 @@ async function getServer(options: RunOptions = {}) {
         level: config.LOG_LEVEL || "debug",
         stream: createStream(generator, {
           path: HOME_DIR,
-          maxFiles: 3,
+          history: logHistoryFile,
           interval: "1d",
           compress: false,
-          maxSize: "50M"
+          size: "50M",
+          maxSize: logMaxSize,
         }),
       };
     } else {

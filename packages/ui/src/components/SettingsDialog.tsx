@@ -120,6 +120,16 @@ export function SettingsDialog({ isOpen, onOpenChange }: SettingsDialogProps) {
             />
           </div>
           <div className="space-y-2">
+            <Label htmlFor="log-max-size" className="transition-all-ease hover:scale-[1.01] cursor-pointer">{t("toplevel.log_max_size")}</Label>
+            <Input
+              id="log-max-size"
+              value={config.LOG_MAX_SIZE || ''}
+              onChange={(e) => setConfig({ ...config, LOG_MAX_SIZE: e.target.value })}
+              placeholder="200M"
+              className="transition-all-ease focus:scale-[1.01]"
+            />
+          </div>
+          <div className="space-y-2">
             <Label
               htmlFor="claude-path"
               className="transition-all-ease hover:scale-[1.01] cursor-pointer"
