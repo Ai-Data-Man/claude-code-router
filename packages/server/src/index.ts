@@ -11,6 +11,7 @@ import { sessionUsageCache } from "@musistudio/llms";
 import { SSEParserTransform } from "./utils/SSEParser.transform";
 import { SSESerializerTransform } from "./utils/SSESerializer.transform";
 import { rewriteStream } from "./utils/rewriteStream";
+import { ToolCallSanitizerTransform } from "./utils/ToolCallSanitizer.transform";
 import JSON5 from "json5";
 import { IAgent, ITool } from "./agents/type";
 import agentsManager from "./agents";
@@ -18,6 +19,12 @@ import { EventEmitter } from "node:events";
 import { pluginManager, tokenSpeedPlugin } from "@musistudio/llms";
 
 const event = new EventEmitter()
+
+// P2: Session circuit breaker state
+// Tracks consecutive malformed tool calls per session; when >= MAX_TOOL_ERRORS,
+// tools are stripped from subsequent requests to break the error loop.
+const sessionToolErrorCount = new Map<string, number>();
+const MAX_TOOL_ERRORS = 3;
 
 async function initializeClaudeConfig() {
   const homeDir = homedir();
@@ -181,8 +188,6 @@ async function getServer(options: RunOptions = {}) {
     return `./logs/ccr-${month}${day}${hour}${minute}${pad(date.getSeconds())}${index ? `_${index}` : ''}.log`;
   };
 
-  let loggerConfig: any;
-
   // Parse log max size config, default to "200M"
   const logMaxSize = config.LOG_MAX_SIZE || "200M";
 
@@ -191,6 +196,8 @@ async function getServer(options: RunOptions = {}) {
 
   // Use a stable history file name so maxSize cleanup works across restarts
   const logHistoryFile = "ccr-rotate-history.txt";
+
+  let loggerConfig: any;
 
   // Use external logger configuration if provided
   if (options.logger !== undefined) {
@@ -274,18 +281,20 @@ async function getServer(options: RunOptions = {}) {
           // change request body
           agent.reqHandler(req, config);
 
-          // append agent tools
+          // append agent tools (override native tools with same name)
           if (agent.tools.size) {
             if (!req.body?.tools?.length) {
               req.body.tools = []
             }
-            req.body.tools.unshift(...Array.from(agent.tools.values()).map(item => {
-              return {
-                name: item.name,
-                description: item.description,
-                input_schema: item.input_schema
-              }
-            }))
+            const agentToolNames = new Set(agent.tools.keys());
+            // Remove native tools that conflict with agent tools (agent version takes priority)
+            req.body.tools = req.body.tools.filter((t: any) => !agentToolNames.has(t.name));
+            const newTools = Array.from(agent.tools.values()).map(item => ({
+              name: item.name,
+              description: item.description,
+              input_schema: item.input_schema
+            }));
+            req.body.tools.unshift(...newTools);
           }
         }
       }
@@ -295,15 +304,69 @@ async function getServer(options: RunOptions = {}) {
       }
     }
   });
+  // P2: Circuit breaker — strip tools if session exceeded error threshold
+  serverInstance.addHook("preHandler", async (req: any, reply: any) => {
+    if (
+      req.sessionId &&
+      req.pathname?.endsWith("/v1/messages") &&
+      Array.isArray(req.body?.tools) &&
+      req.body.tools.length > 0
+    ) {
+      const errorCount = sessionToolErrorCount.get(req.sessionId) || 0;
+      if (errorCount >= MAX_TOOL_ERRORS) {
+        console.warn(
+          `[CCR:circuit-breaker] Stripping tools for session=${req.sessionId} errorCount=${errorCount}`
+        );
+        req.body.tools = [];
+      } else if (errorCount > 0) {
+        console.warn(
+          `[CCR:circuit-breaker] session=${req.sessionId} errorCount=${errorCount}/${MAX_TOOL_ERRORS} tools=${req.body.tools.length}`
+        );
+      }
+    }
+  });
   serverInstance.addHook("onError", async (request: any, reply: any, error: any) => {
     event.emit('onError', request, reply, error);
   })
   serverInstance.addHook("onSend", (req: any, reply: any, payload: any, done: any) => {
     if (req.sessionId && req.pathname.endsWith("/v1/messages")) {
       if (payload instanceof ReadableStream) {
+        // SSEParserTransform expects string input, need TextDecoderStream to convert from bytes
+        const decoder = new TextDecoderStream();
+
+        // Always parse + sanitize SSE events (P1)
+        console.log(
+          `[CCR:sanitizer] active sessionId=${req.sessionId} model=${req.body?.model || "?"} agents=${!!req.agents}`
+        );
+        const eventStream = payload
+          .pipeThrough(decoder)
+          .pipeThrough(new SSEParserTransform());
+        const sanitizedStream = eventStream.pipeThrough(new ToolCallSanitizerTransform({
+          onToolSuppressed: (index, reason) => {
+            const count = (sessionToolErrorCount.get(req.sessionId) || 0) + 1;
+            sessionToolErrorCount.set(req.sessionId, count);
+            console.warn(
+              `[CCR:sanitizer] suppressed tool call index=${index} reason="${reason}" sessionId=${req.sessionId} errorCount=${count}/${MAX_TOOL_ERRORS}`
+            );
+          },
+          onToolCompleted: () => {
+            const prev = sessionToolErrorCount.get(req.sessionId);
+            if (prev !== undefined) {
+              sessionToolErrorCount.delete(req.sessionId);
+              console.warn(
+                `[CCR:circuit-breaker] session=${req.sessionId} toolErrorCount reset (was ${prev})`
+              );
+            }
+          },
+          onAllToolCallsSuppressed: () => {
+            console.warn(
+              `[CCR:sanitizer] all tool calls suppressed, stop_reason corrected to end_turn sessionId=${req.sessionId}`
+            );
+          },
+        }));
+
         if (req.agents) {
           const abortController = new AbortController();
-          const eventStream = payload.pipeThrough(new SSEParserTransform())
           let currentAgent: undefined | IAgent;
           let currentToolIndex = -1
           let currentToolName = ''
@@ -312,7 +375,7 @@ async function getServer(options: RunOptions = {}) {
           const toolMessages: any[] = []
           const assistantMessages: any[] = []
           // Store Anthropic format message body, distinguishing text and tool types
-          return done(null, rewriteStream(eventStream, async (data, controller) => {
+          return done(null, rewriteStream(sanitizedStream, async (data, controller) => {
             try {
               // Detect tool call start
               if (data.event === 'content_block_start' && data?.data?.content_block?.name) {
@@ -391,7 +454,9 @@ async function getServer(options: RunOptions = {}) {
                   )
                   return undefined;
                 }
-                const stream = response.body!.pipeThrough(new SSEParserTransform() as any)
+                const stream = response.body!
+                  .pipeThrough(new TextDecoderStream())
+                  .pipeThrough(new SSEParserTransform() as any)
                 const reader = stream.getReader()
                 let forwardedEvents = 0
                 let skippedSystemEvents = 0
@@ -451,36 +516,34 @@ async function getServer(options: RunOptions = {}) {
           }).pipeThrough(new SSESerializerTransform()))
         }
 
-        const [originalStream, clonedStream] = payload.tee();
+        // Non-agent path: split sanitized stream into main + background usage tracking
+        console.log(
+          `[CCR:onSend] non-agent path sessionId=${req.sessionId} using parsed event tracking`
+        );
+        const [mainStream, usageStream] = sanitizedStream.tee();
         const read = async (stream: ReadableStream) => {
           const reader = stream.getReader();
           try {
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
-              // Process the value if needed
-              const dataStr = new TextDecoder().decode(value);
-              if (!dataStr.startsWith("event: message_delta")) {
-                continue;
+              // Process parsed events for usage tracking
+              if (value.event === 'message_delta' && value.data?.usage) {
+                sessionUsageCache.put(req.sessionId, value.data.usage);
               }
-              const str = dataStr.slice(27);
-              try {
-                const message = JSON.parse(str);
-                sessionUsageCache.put(req.sessionId, message.usage);
-              } catch {}
             }
           } catch (readError: any) {
             if (readError.name === 'AbortError' || readError.code === 'ERR_STREAM_PREMATURE_CLOSE') {
-              console.error('Background read stream closed prematurely');
+              console.error('Background usage stream closed prematurely');
             } else {
-              console.error('Error in background stream reading:', readError);
+              console.error('Error in background usage reading:', readError);
             }
           } finally {
             reader.releaseLock();
           }
         }
-        read(clonedStream);
-        return done(null, originalStream)
+        read(usageStream);
+        return done(null, mainStream.pipeThrough(new SSESerializerTransform()))
       }
       sessionUsageCache.put(req.sessionId, payload.usage);
       if (typeof payload ==='object') {

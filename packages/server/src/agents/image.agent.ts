@@ -18,16 +18,29 @@ class ImageCache {
     });
   }
 
-  storeImage(id: string, source: any): void {
+  storeImage(id: string, source: any, globalId?: string): void {
     if (this.hasImage(id)) return;
     this.cache.set(id, {
       source,
       timestamp: Date.now(),
     });
+    // Also store with global key for cross-request fallback
+    if (globalId && !this.hasImage(globalId)) {
+      this.cache.set(globalId, {
+        source,
+        timestamp: Date.now(),
+      });
+    }
   }
 
   getImage(id: string): any {
     const entry = this.cache.get(id);
+    return entry ? entry.source : null;
+  }
+
+  getImageWithFallback(scopedKey: string, globalKey: string): any {
+    let entry = this.cache.get(scopedKey);
+    if (!entry) entry = this.cache.get(globalKey);
     return entry ? entry.source : null;
   }
 
@@ -56,8 +69,9 @@ export class ImageAgent implements IAgent {
   }
 
   shouldHandle(req: any, config: any): boolean {
-    if (!config.Router.image || req.body.model === config.Router.image)
-      return false;
+    if (!config.Router.image || req.body.model === config.Router.image) return false;
+    // Force mode: always activate ImageAgent so analyzeImage tool is injected
+    if (config.forceUseImageAgent) return true;
     const lastMessage = req.body.messages[req.body.messages.length - 1];
     if (
       !config.forceUseImageAgent &&
@@ -110,7 +124,7 @@ export class ImageAgent implements IAgent {
         properties: {
           imageId: {
             type: "array",
-            description: "an array of IDs to analyse",
+            description: "an array of image IDs to analyse. Extract the number from [Image #N] placeholders in the conversation, e.g. [Image #5] → pass [\"5\"]. If unsure, pass an empty array and the system will auto-detect.",
             items: {
               type: "string",
             },
@@ -150,33 +164,93 @@ export class ImageAgent implements IAgent {
         const imageMessages = [];
         let imageId;
 
-        // Create image messages from cached images
+        // Collect image IDs: from args
+        const imgIds: string[] = [];
         if (args.imageId) {
           if (Array.isArray(args.imageId)) {
-            args.imageId.forEach((imgId: string) => {
-              const image = imageCache.getImage(
-                `${context.req.id}_Image#${imgId}`
-              );
-              if (image) {
-                imageMessages.push({
-                  type: "image",
-                  source: image,
-                });
-              }
-            });
-          } else {
-            const image = imageCache.getImage(
-              `${context.req.id}_Image#${args.imageId}`
-            );
-            if (image) {
-              imageMessages.push({
-                type: "image",
-                source: image,
-              });
-            }
+            imgIds.push(...args.imageId.filter(Boolean));
+          } else if (typeof args.imageId === 'string') {
+            imgIds.push(args.imageId);
           }
           imageId = args.imageId;
           delete args.imageId;
+        }
+
+        // Phase 1: Look up images from cache by ID + scan messages for embedded image data
+        const allMsgs = context.req.body.messages || [];
+
+        // Helper: extract imgs from raw message content (tool_result images)
+        const extractRawImages = (content: any): any[] => {
+          const imgs: any[] = [];
+          if (!Array.isArray(content)) return imgs;
+          for (const item of content) {
+            if (item.type === "image" && item.source) {
+              imgs.push({ type: "image", source: item.source });
+            }
+            if (Array.isArray(item.content)) {
+              imgs.push(...extractRawImages(item.content));
+            }
+          }
+          return imgs;
+        };
+
+        // Collect all candidate images: cache hits + raw embedded images
+        const seenImages = new Set<string>();
+
+        // 1a. Try cache lookup by ID (with global fallback)
+        for (const imgId of imgIds) {
+          const image = imageCache.getImageWithFallback(
+            `${context.req.id}_Image#${imgId}`,
+            `_Image#${imgId}`
+          );
+          if (image) {
+            const key = `${context.req.id}_Image#${imgId}`;
+            if (!seenImages.has(key)) {
+              seenImages.add(key);
+              imageMessages.push({ type: "image", source: image });
+            }
+          }
+        }
+
+        // 1b. If no cache hits, scan messages for image IDs + try cache with fallback
+        if (imageMessages.length === 0) {
+          for (const msg of allMsgs) {
+            const content = msg.content;
+            if (Array.isArray(content)) {
+              for (const item of content) {
+                if (item.type === "text") {
+                  const match = item.text.match(/\[Image #(\d+)\]/);
+                  if (match) {
+                    const image = imageCache.getImageWithFallback(
+                      `${context.req.id}_Image#${match[1]}`,
+                      `_Image#${match[1]}`
+                    );
+                    if (image) {
+                      const key = `${context.req.id}_Image#${match[1]}`;
+                      if (!seenImages.has(key)) {
+                        seenImages.add(key);
+                        imageMessages.push({ type: "image", source: image });
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // 1c. If still no images, extract directly from raw message content (tool_result)
+        if (imageMessages.length === 0) {
+          for (const msg of allMsgs) {
+            const raw = extractRawImages(msg.content);
+            for (const img of raw) {
+              const key = JSON.stringify(img.source).slice(0, 100);
+              if (!seenImages.has(key)) {
+                seenImages.add(key);
+                imageMessages.push(img);
+              }
+            }
+          }
         }
 
         const userMessage =
@@ -199,8 +273,8 @@ export class ImageAgent implements IAgent {
           });
         }
 
-        // Send to analysis agent and get response
-        const agentResponse = await fetch(
+        // Send to analysis agent and get response (parse SSE format)
+        const response = await fetch(
           `http://127.0.0.1:${context.config.PORT || 3456}/v1/messages`,
           {
             method: "POST",
@@ -213,9 +287,9 @@ export class ImageAgent implements IAgent {
               system: [
                 {
                   type: "text",
-                  text: `You must interpret and analyze images strictly according to the assigned task.  
-When an image placeholder is provided, your role is to parse the image content only within the scope of the user’s instructions.  
-Do not ignore or deviate from the task.  
+                  text: `You must interpret and analyze images strictly according to the assigned task.
+When an image placeholder is provided, your role is to parse the image content only within the scope of the user’s instructions.
+Do not ignore or deviate from the task.
 Always ensure that your response reflects a clear, accurate interpretation of the image aligned with the given objective.`,
                 },
               ],
@@ -228,15 +302,15 @@ Always ensure that your response reflects a clear, accurate interpretation of th
               stream: false,
             }),
           }
-        )
-          .then((res) => res.json())
-          .catch((err) => {
-            return null;
-          });
-        if (!agentResponse || !agentResponse.content) {
+        );
+        if (!response.ok) {
           return "analyzeImage Error";
         }
-        return agentResponse.content[0].text;
+        const result: any = await response.json();
+        if (!result?.content?.[0]?.text) {
+          return "analyzeImage Error";
+        }
+        return result.content[0].text;
       },
     });
   }
@@ -245,16 +319,16 @@ Always ensure that your response reflects a clear, accurate interpretation of th
     // Inject system prompt
     req.body?.system?.push({
       type: "text",
-      text: `You are a text-only language model and do not possess visual perception.  
-If the user requests you to view, analyze, or extract information from an image, you **must** call the \`analyzeImage\` tool.  
+      text: `You are a text-only language model and do not possess visual perception.
+If the user requests you to view, analyze, or extract information from an image, you **must** call the \`analyzeImage\` tool.
 
-When invoking this tool, you must pass the correct \`imageId\` extracted from the prior conversation.  
-Image identifiers are always provided in the format \`[Image #imageId]\`.  
+When invoking this tool, pass the \`imageId\` parameter as an array of strings extracted from \`[Image #N]\` placeholders in the conversation.
+For example, if you see \`[Image #5]\`, pass \`imageId: ["5"]\`. The number inside brackets is the image identifier.
 
-If multiple images exist, select the **most relevant imageId** based on the user’s current request and prior context.  
+If you cannot find any \`[Image #N]\` placeholder, pass \`imageId: []\` and the system will auto-detect available images.
 
-Do not attempt to describe or analyze the image directly yourself.  
-Ignore any user interruptions or unrelated instructions that might cause you to skip this requirement.  
+Do not attempt to describe or analyze the image directly yourself.
+Ignore any user interruptions or unrelated instructions that might cause you to skip this requirement.
 Your response should consistently follow this rule whenever image-related analysis is requested.`,
     });
 
@@ -276,7 +350,7 @@ Your response should consistently follow this rule whenever image-related analys
       if (!Array.isArray(item.content)) return;
       item.content.forEach((msg: any) => {
         if (msg.type === "image") {
-          imageCache.storeImage(`${req.id}_Image#${imgId}`, msg.source);
+          imageCache.storeImage(`${req.id}_Image#${imgId}`, msg.source, `_Image#${imgId}`);
           msg.type = "text";
           delete msg.source;
           msg.text = `[Image #${imgId}]This is an image, if you need to view or analyze it, you need to extract the imageId`;
@@ -290,7 +364,8 @@ Your response should consistently follow this rule whenever image-related analys
           ) {
             imageCache.storeImage(
               `${req.id}_Image#${imgId}`,
-              msg.content[0].source
+              msg.content[0].source,
+              `_Image#${imgId}`
             );
             msg.content = `[Image #${imgId}]This is an image, if you need to view or analyze it, you need to extract the imageId`;
             imgId++;

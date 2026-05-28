@@ -8,6 +8,9 @@ export class DeepseekTransformer implements Transformer {
     if (request.max_tokens && request.max_tokens > 8192) {
       request.max_tokens = 8192; // DeepSeek has a max token limit of 8192
     }
+    if (request.tool_choice) {
+      delete request.tool_choice;
+    }
     return request;
   }
 
