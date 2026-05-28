@@ -1,5 +1,6 @@
 import { UnifiedChatRequest } from "../types/llm";
 import { Transformer } from "../types/transformer";
+import { extractXmlToolCalls, stripXmlToolCalls, hasXmlToolCalls } from "./tooluse-xml-converter";
 
 export class TooluseTransformer implements Transformer {
   name = "tooluse";
@@ -113,11 +114,25 @@ Examples:
               try {
                 const data = JSON.parse(line.slice(6));
 
+                // Check if delta contains XML tool calls in content
+                if (data.choices[0]?.delta?.content && hasXmlToolCalls(data.choices[0].delta.content)) {
+                  const content = data.choices[0].delta.content;
+                  const xmlToolCalls = extractXmlToolCalls(content);
+                  if (xmlToolCalls.length > 0) {
+                    // Convert XML tool calls to native tool_calls format
+                    data.choices[0].delta.tool_calls = xmlToolCalls;
+                    // Remove the XML tool call blocks from content, keep any text before/after
+                    data.choices[0].delta.content = stripXmlToolCalls(content) || "";
+                  }
+                }
+
+                // For tool_calls that are ExitTool, handle specially
                 if (data.choices[0]?.delta?.tool_calls?.length) {
                   const toolCall = data.choices[0].delta.tool_calls[0];
 
                   if (toolCall.function?.name === "ExitTool") {
                     setExitToolIndex(toolCall.index);
+                    // Don't enqueue the ExitTool call - we'll replace it later
                     return;
                   } else if (
                     exitToolIndex() > -1 &&
@@ -127,27 +142,33 @@ Examples:
                     appendExitToolResponse(toolCall.function.arguments);
                     try {
                       const response = JSON.parse(context.exitToolResponse());
-                      data.choices = [
-                        {
-                          delta: {
-                            role: "assistant",
-                            content: response.response || "",
-                          },
-                        },
-                      ];
+                      // Replace the ExitTool call with a text response
+                      data.choices[0].delta = {
+                        role: "assistant",
+                        content: response.response || "",
+                      };
+                      delete data.choices[0].delta.tool_calls;
                       const modifiedLine = `data: ${JSON.stringify(
                         data
                       )}\n\n`;
                       controller.enqueue(encoder.encode(modifiedLine));
-                    } catch (e) {}
+                    } catch (e) {
+                      // Fallback: enqueue original line
+                      controller.enqueue(encoder.encode(line + "\n"));
+                    }
                     return;
                   }
                 }
 
-                if (
-                  data.choices?.[0]?.delta &&
-                  Object.keys(data.choices[0].delta).length > 0
-                ) {
+                // Always enqueue the processed data (original or modified)
+                // Check if we have any delta content to send
+                const hasDelta = data.choices?.[0]?.delta &&
+                  Object.keys(data.choices[0].delta).length > 0;
+
+                // Also send if there are tool_calls (non-ExitTool) that need to be processed
+                const hasToolCalls = data.choices?.[0]?.delta?.tool_calls?.length > 0;
+
+                if (hasDelta || hasToolCalls) {
                   const modifiedLine = `data: ${JSON.stringify(data)}\n\n`;
                   controller.enqueue(encoder.encode(modifiedLine));
                 }
