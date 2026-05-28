@@ -17,6 +17,12 @@ export interface SharedProviderConfig {
   transformer?: SharedProviderTransformer;
 }
 
+export interface EmptyResponseRetryConfig {
+  enabled?: boolean;
+  maxAttempts?: number;
+  backoffMs?: number;
+}
+
 export interface ScopedRouterConfig {
   default?: string;
   background?: string;
@@ -40,6 +46,7 @@ export interface GlobalConfigPatch {
   forceUseImageAgent?: boolean;
   transformers?: any[];
   Router?: ScopedRouterConfig;
+  emptyResponseRetry?: EmptyResponseRetryConfig;
 }
 
 export interface ProjectIndexItem {
@@ -48,6 +55,7 @@ export interface ProjectIndexItem {
   hasOverride: boolean;
   lastActivityAt?: string;
   source?: "auto" | "manual";
+  emptyResponseRetry?: EmptyResponseRetryConfig;
 }
 
 export interface SessionIndexItem {
@@ -55,6 +63,7 @@ export interface SessionIndexItem {
   projectPath: string;
   lastActivityAt: string;
   hasOverride: boolean;
+  emptyResponseRetry?: EmptyResponseRetryConfig;
 }
 
 export interface ScopedConfigFile {
@@ -127,5 +136,6 @@ export function pickGlobalConfig(config: Record<string, any>): GlobalConfigPatch
     forceUseImageAgent: config.forceUseImageAgent,
     transformers: Array.isArray(config.transformers) ? config.transformers : [],
     Router: config.Router || {},
+    emptyResponseRetry: config.emptyResponseRetry || {},
   };
 }

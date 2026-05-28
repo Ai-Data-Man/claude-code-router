@@ -317,6 +317,9 @@ async function getServer(options: RunOptions = {}) {
                   role: 'user',
                   content: toolMessages
                 })
+                console.log(
+                  `[CCR:retry] nested agent request start reqId=${req.id} sessionId=${req.sessionId} toolCount=${toolMessages.length} assistantCount=${assistantMessages.length} model=${req.body?.model || "?"}`
+                )
                 const response = await fetch(`http://127.0.0.1:${config.PORT || 3456}/v1/messages`, {
                   method: "POST",
                   headers: {
@@ -325,11 +328,20 @@ async function getServer(options: RunOptions = {}) {
                   },
                   body: JSON.stringify(req.body),
                 })
+                console.log(
+                  `[CCR:retry] nested agent response reqId=${req.id} ok=${response.ok} status=${response.status} contentType=${response.headers.get('content-type') || '<none>'}`
+                )
                 if (!response.ok) {
+                  console.warn(
+                    `[CCR:retry] nested agent request failed reqId=${req.id} status=${response.status}`
+                  )
                   return undefined;
                 }
                 const stream = response.body!.pipeThrough(new SSEParserTransform() as any)
                 const reader = stream.getReader()
+                let forwardedEvents = 0
+                let skippedSystemEvents = 0
+                let sawBackpressure = false
                 while (true) {
                   try {
                     const {value, done} = await reader.read();
@@ -338,24 +350,35 @@ async function getServer(options: RunOptions = {}) {
                     }
                     const eventData = value as any;
                     if (['message_start', 'message_stop'].includes(eventData.event)) {
+                      skippedSystemEvents++
                       continue
                     }
 
                     // Check if stream is still writable
                     if (!controller.desiredSize) {
-                      break;
+                      sawBackpressure = true
+                      console.warn(
+                        `[CCR:retry] nested agent stream backpressure reqId=${req.id} desiredSize=${controller.desiredSize} forwarded=${forwardedEvents} skipped=${skippedSystemEvents}`
+                      );
                     }
 
+                    forwardedEvents++
                     controller.enqueue(eventData)
                   }catch (readError: any) {
                     if (readError.name === 'AbortError' || readError.code === 'ERR_STREAM_PREMATURE_CLOSE') {
                       abortController.abort(); // Abort all related operations
+                      console.warn(
+                        `[CCR:retry] nested agent stream aborted reqId=${req.id} forwarded=${forwardedEvents} skipped=${skippedSystemEvents} backpressure=${sawBackpressure}`
+                      );
                       break;
                     }
                     throw readError;
                   }
 
                 }
+                console.log(
+                  `[CCR:retry] nested agent stream done reqId=${req.id} forwarded=${forwardedEvents} skipped=${skippedSystemEvents} backpressure=${sawBackpressure}`
+                )
                 return undefined
               }
               return data

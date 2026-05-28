@@ -12,6 +12,7 @@ import { ConfigService } from "@/services/config";
 import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
 import { Transformer } from "@/types/transformer";
+import { retryEmptyResponse } from "@/utils/empty-response-retry";
 
 // Extend FastifyInstance to include custom services
 declare module "fastify" {
@@ -51,44 +52,70 @@ async function handleTransformerEndpoint(
   }
 
   try {
-    // Process request transformer chain
-    const { requestBody, config, bypass } = await processRequestTransformers(
-      body,
-      provider,
-      transformer,
-      req.headers,
-      {
-        req,
-      }
+    console.log(
+      `[CCR:retry] api-route start reqId=${req.id} provider=${providerName} model=${body?.model || "?"} stream=${body?.stream === true}`
     );
 
-    // Send request to LLM provider
-    const response = await sendRequestToProvider(
-      requestBody,
-      config,
-      provider,
-      fastify,
-      bypass,
-      transformer,
-      {
-        req,
-      }
-    );
+    // Retry empty assistant responses before returning to Claude Code
+    const finalResponse = await retryEmptyResponse({
+      attempt: async () => {
+        console.log(
+          `[CCR:retry] api-route attempt reqId=${req.id} provider=${providerName} model=${body?.model || "?"}`
+        );
+        // Process request transformer chain
+        const { requestBody, config, bypass } = await processRequestTransformers(
+          body,
+          provider,
+          transformer,
+          req.headers,
+          {
+            req,
+          }
+        );
 
-    // Process response transformer chain
-    const finalResponse = await processResponseTransformers(
-      requestBody,
-      response,
-      provider,
-      transformer,
-      bypass,
-      {
-        req,
-      }
-    );
+        console.log(
+          `[CCR:retry] api-route request prepared reqId=${req.id} bypass=${bypass} configKeys=${Object.keys(config || {}).join(",")}`
+        );
+
+        // Send request to LLM provider
+        const response = await sendRequestToProvider(
+          requestBody,
+          config,
+          provider,
+          fastify,
+          bypass,
+          transformer,
+          {
+            req,
+          }
+        );
+
+        console.log(
+          `[CCR:retry] api-route provider response reqId=${req.id} status=${response.status} contentType=${response.headers.get("Content-Type") || "<none>"}`
+        );
+
+        // Process response transformer chain
+        return processResponseTransformers(
+          requestBody,
+          response,
+          provider,
+          transformer,
+          bypass,
+          {
+            req,
+          }
+        );
+      },
+      retryConfig: fastify.configService.get("emptyResponseRetry", {}),
+      logger: req.log,
+      reqId: req.id,
+      source: "api-route",
+    });
+
 
     // Format and return response
     return formatResponse(finalResponse, reply, body);
+
   } catch (error: any) {
     // Handle fallback if error occurs
     if (error.code === 'provider_response_error') {

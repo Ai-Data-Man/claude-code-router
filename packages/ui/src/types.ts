@@ -96,12 +96,19 @@ export interface StatusLineConfig {
   fontFamily?: string;
 }
 
+export interface EmptyResponseRetryConfig {
+  enabled?: boolean;
+  maxAttempts?: number;
+  backoffMs?: number;
+}
+
 export interface Config {
   Providers: Provider[];
   Router: RouterConfig;
   transformers: Transformer[];
   StatusLine?: StatusLineConfig;
   forceUseImageAgent?: boolean;
+  emptyResponseRetry?: EmptyResponseRetryConfig;
   // Top-level settings
   LOG: boolean;
   LOG_LEVEL: string;
