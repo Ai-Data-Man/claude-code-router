@@ -195,7 +195,10 @@ const getUseModel = async (
 ): Promise<{ model: string; scenarioType: RouterScenarioType }> => {
   const projectSpecificRouter = await getProjectSpecificRouter(req, configService);
   const providers = configService.get<any[]>("providers") || [];
-  const Router = projectSpecificRouter || configService.get("Router");
+  const globalRouter = configService.get("Router") || {};
+  const Router = projectSpecificRouter
+    ? { ...globalRouter, ...projectSpecificRouter }
+    : globalRouter;
   req.log?.debug(
     {
       sessionId: req.sessionId,
@@ -249,7 +252,6 @@ const getUseModel = async (
     }
   }
   // Use the background model for any Claude Haiku variant
-  const globalRouter = configService.get("Router");
   if (
     req.body.model?.includes("claude") &&
     req.body.model?.includes("haiku") &&
