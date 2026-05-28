@@ -1,12 +1,25 @@
 node_modules
-.env
 log.txt
-.idea
 dist
-.DS_Store
-.vscode
 tsconfig.tsbuildinfo
 
 # Documentation build output
 docs/build
 docs/.docusaurus
+
+
+# 忽略个人覆盖配置
+CLAUDE.local.md
+# 忽略所有以 . 开头的文件和目录进（后续内容都要注意与 .* 的相对关系）
+.*
+# 保留 .gitignore
+!.gitignore
+# 保留 .claude 目录及其内容
+!.claude
+.claude/worktrees
+# 保留 .trellis 目录及其内容，忽略部分个人配置
+!.trellis
+.trellis/workspace
+.trellis/tasks
+.trellis/.developer
+.trellis/.current-task
