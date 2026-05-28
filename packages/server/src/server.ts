@@ -1,5 +1,17 @@
 import Server, { calculateTokenCount, TokenizerService } from "@musistudio/llms";
 import { readConfigFile, writeConfigFile, backupConfigFile } from "./utils";
+import {
+  getGlobalScopedConfig,
+  getProjectScopedConfig,
+  getSessionScopedConfig,
+  getSharedProviders,
+  listProjects,
+  listRecentSessions,
+  saveGlobalScopedConfig,
+  saveProjectScopedConfig,
+  saveSessionScopedConfig,
+  saveSharedProviders,
+} from "./utils/scopedConfig";
 import { join } from "path";
 import fastifyStatic from "@fastify/static";
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, rmSync } from "fs";
@@ -87,6 +99,79 @@ export const createServer = async (config: any): Promise<any> => {
     return await readConfigFile();
   });
 
+  app.get("/api/providers-shared", async () => {
+    return { providers: await getSharedProviders() };
+  });
+
+  app.post("/api/providers-shared", async (req: any) => {
+    const providers = Array.isArray(req.body?.providers) ? req.body.providers : [];
+    const result = await saveSharedProviders(providers);
+    (app as any)._server!.configService.reload();
+    return result;
+  });
+
+  app.get("/api/config/global", async () => {
+    return await getGlobalScopedConfig();
+  });
+
+  app.post("/api/config/global", async (req: any) => {
+    const result = await saveGlobalScopedConfig(req.body || {});
+    (app as any)._server!.configService.reload();
+    return result;
+  });
+
+  app.get("/api/config/projects", async () => {
+    return { projects: await listProjects() };
+  });
+
+  app.get("/api/config/project", async (req: any, reply: any) => {
+    const projectPath = req.query?.projectPath;
+    if (!projectPath) {
+      reply.status(400).send({ error: "projectPath is required" });
+      return;
+    }
+    return await getProjectScopedConfig(projectPath);
+  });
+
+  app.post("/api/config/project", async (req: any, reply: any) => {
+    const projectPath = req.body?.projectPath;
+    if (!projectPath) {
+      reply.status(400).send({ error: "projectPath is required" });
+      return;
+    }
+    req.log?.debug({ projectPath, router: req.body?.Router || {} }, "Saving project scoped router config");
+    return saveProjectScopedConfig(projectPath, req.body?.Router || {}, req.log);
+  });
+
+  app.get("/api/config/sessions/recent", async (req: any) => {
+    return {
+      sessions: await listRecentSessions({
+        limit: req.query?.limit,
+        from: req.query?.from,
+        to: req.query?.to,
+        projectPath: req.query?.projectPath,
+      }),
+    };
+  });
+
+  app.get("/api/config/session", async (req: any, reply: any) => {
+    const sessionId = req.query?.sessionId;
+    if (!sessionId) {
+      reply.status(400).send({ error: "sessionId is required" });
+      return;
+    }
+    return await getSessionScopedConfig(sessionId, req.query?.projectPath);
+  });
+
+  app.post("/api/config/session", async (req: any, reply: any) => {
+    const sessionId = req.body?.sessionId;
+    if (!sessionId) {
+      reply.status(400).send({ error: "sessionId is required" });
+      return;
+    }
+    return saveSessionScopedConfig(sessionId, req.body?.Router || {}, req.body?.projectPath);
+  });
+
   app.get("/api/transformers", async (req: any, reply: any) => {
     const transformers =
       (app as any)._server!.transformerService.getAllTransformers();
@@ -110,7 +195,8 @@ export const createServer = async (config: any): Promise<any> => {
     }
 
     await writeConfigFile(newConfig);
-    return { success: true, message: "Config saved successfully" };
+    (app as any)._server!.configService.reload();
+    return { success: true, message: "Config saved and applied successfully" };
   });
 
   // Register static file serving with caching

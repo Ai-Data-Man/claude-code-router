@@ -89,6 +89,7 @@
     "fetch_available_models": "获取可用模型",
     "fetching_models": "获取模型中...",
     "fetch_models_failed": "获取模型失败",
+    "available_models_to_add": "可用模型（点击添加）",
     "transformers": "转换器",
     "select_transformer": "选择转换器",
     "no_transformers": "无可用转换器",
@@ -120,7 +121,8 @@
     "forceUseImageAgent": "强制使用图像代理",
     "selectModel": "选择一个模型...",
     "searchModel": "搜索模型...",
-    "noModelFound": "未找到模型."
+    "noModelFound": "未找到模型.",
+    "disabled_reference_warning": "当前路由仍引用已禁用的 Provider 或模型"
   },
   "json_editor": {
     "title": "JSON 编辑器",
@@ -297,5 +299,22 @@
       "apply": "应用",
       "cancel": "取消"
     }
+  },
+  "scoped": {
+    "scope_global": "全局",
+    "scope_project": "项目",
+    "scope_session": "会话",
+    "view_effective": "生效视图",
+    "view_override": "覆盖视图",
+    "project_select": "选择项目",
+    "session_select": "筛选会话",
+    "search_project": "搜索项目路径",
+    "all_projects": "全部项目",
+    "no_projects": "未找到项目",
+    "no_sessions": "未找到会话",
+    "has_override": "已有覆盖",
+    "inherit_only": "仅继承",
+    "add_manually": "手动添加项目",
+    "reset_inherit": "恢复继承"
   }
 }

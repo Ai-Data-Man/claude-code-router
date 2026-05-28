@@ -1,4 +1,4 @@
-import type { Config, Provider, Transformer } from '@/types';
+import type { Config, Provider, Transformer, ProjectItem, SessionItem, ScopedRouterConfig } from '@/types';
 
 // 日志聚合响应类型
 interface GroupedLogsResponse {
@@ -187,6 +187,43 @@ class ApiClient {
     return this.delete<void>(`/api/providers/${index}`);
   }
 
+  // Fetch available model IDs from provider's models endpoint
+  async fetchProviderModels(apiBaseUrl: string, apiKey: string, modelsPath?: string): Promise<string[]> {
+    try {
+      const baseUrl = apiBaseUrl.replace(/\/+$/, '');
+      const parsedUrl = new URL(baseUrl);
+      const inferredPath = parsedUrl.pathname.endsWith('/models')
+        ? parsedUrl.pathname
+        : '/v1/models';
+      const targetPath = modelsPath?.trim() || inferredPath;
+      const normalizedPath = targetPath.startsWith('/') ? targetPath : `/${targetPath}`;
+      const modelsUrl = `${parsedUrl.origin}${normalizedPath}`;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (apiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+      }
+
+      const response = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(10000) });
+      if (!response.ok) return [];
+
+      const data = await response.json();
+      const items = Array.isArray(data.data)
+        ? data.data
+        : Array.isArray(data.models)
+          ? data.models
+          : Array.isArray(data)
+            ? data
+            : [];
+      return items
+        .map((item: any) => item.id || item.name || '')
+        .filter(Boolean)
+        .sort();
+    } catch {
+      return [];
+    }
+  }
+
+
   // Get transformers
   async getTransformers(): Promise<Transformer[]> {
     return this.get<Transformer[]>('/api/transformers');
@@ -220,6 +257,76 @@ class ApiClient {
   // Restart service
   async restartService(): Promise<unknown> {
     return this.post<void>('/restart', {});
+  }
+
+  // ========== Scoped Config API methods ==========
+
+  // Get shared providers (normalized with enabled state)
+  async getSharedProviders(): Promise<{ providers: Provider[] }> {
+    return this.get<{ providers: Provider[] }>('/providers-shared');
+  }
+
+  // Save shared providers
+  async saveSharedProviders(providers: Provider[]): Promise<{ success: boolean; message: string }> {
+    return this.post<{ success: boolean; message: string }>('/providers-shared', { providers });
+  }
+
+  // Get global scoped config
+  async getGlobalConfig(): Promise<Config> {
+    return this.get<Config>('/config/global');
+  }
+
+  // Save global scoped config
+  async saveGlobalConfig(patch: Partial<Config>): Promise<{ success: boolean; message: string }> {
+    return this.post<{ success: boolean; message: string }>('/config/global', patch);
+  }
+
+  // List projects
+  async listProjects(): Promise<{ projects: ProjectItem[] }> {
+    return this.get<{ projects: ProjectItem[] }>('/config/projects');
+  }
+
+  // Get project scoped config
+  async getProjectConfig(projectPath: string): Promise<{ Router?: Partial<import('@/types').RouterConfig> }> {
+    return this.get<{ Router?: Partial<import('@/types').RouterConfig> }>(`/config/project?projectPath=${encodeURIComponent(projectPath)}`);
+  }
+
+  // Save project scoped config
+  async saveProjectConfig(projectPath: string, Router: Partial<import('@/types').RouterConfig>): Promise<{ success: boolean; message: string }> {
+    return this.post<{ success: boolean; message: string }>('/config/project', { projectPath, Router });
+  }
+
+  // List recent sessions
+  async listRecentSessions(options?: { limit?: number; from?: string; to?: string; projectPath?: string }): Promise<{ sessions: SessionItem[] }> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.from) params.set('from', options.from);
+    if (options?.to) params.set('to', options.to);
+    if (options?.projectPath) params.set('projectPath', options.projectPath);
+    const query = params.toString();
+    return this.get<{ sessions: SessionItem[] }>(`/config/sessions/recent${query ? `?${query}` : ''}`);
+  }
+
+  // Get session scoped config
+  async getSessionConfig(sessionId: string, projectPath?: string): Promise<{ Router?: Partial<import('@/types').RouterConfig> }> {
+    const params = new URLSearchParams({ sessionId });
+    if (projectPath) params.set('projectPath', projectPath);
+    return this.get<{ Router?: Partial<import('@/types').RouterConfig> }>(`/config/session?${params.toString()}`);
+  }
+
+  // Save session scoped config
+  async saveSessionConfig(sessionId: string, Router: Partial<import('@/types').RouterConfig>, projectPath?: string): Promise<{ success: boolean; message: string }> {
+    return this.post<{ success: boolean; message: string }>('/config/session', { sessionId, Router, projectPath });
+  }
+
+  // Probe whether scoped config endpoints are available
+  async probeScopedConfig(): Promise<boolean> {
+    try {
+      await this.get('/config/projects');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // Check for updates

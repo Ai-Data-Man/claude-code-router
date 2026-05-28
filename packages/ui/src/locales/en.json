@@ -89,6 +89,7 @@
     "fetch_available_models": "Fetch available models",
     "fetching_models": "Fetching models...",
     "fetch_models_failed": "Failed to fetch models",
+    "available_models_to_add": "Available Models (click to add)",
     "transformers": "Transformers",
     "select_transformer": "Select Transformer",
     "no_transformers": "No transformers available",
@@ -120,7 +121,8 @@
     "forceUseImageAgent": "Force Use Image Agent",
     "selectModel": "Select a model...",
     "searchModel": "Search model...",
-    "noModelFound": "No model found."
+    "noModelFound": "No model found.",
+    "disabled_reference_warning": "Current route references a disabled provider or model"
   },
   "json_editor": {
     "title": "JSON Editor",
@@ -298,5 +300,22 @@
       "apply": "Apply",
       "cancel": "Cancel"
     }
+  },
+  "scoped": {
+    "scope_global": "Global",
+    "scope_project": "Project",
+    "scope_session": "Session",
+    "view_effective": "Effective",
+    "view_override": "Override",
+    "project_select": "Select Project",
+    "session_select": "Filter Sessions",
+    "search_project": "Search project path",
+    "all_projects": "All Projects",
+    "no_projects": "No projects found",
+    "no_sessions": "No sessions found",
+    "has_override": "Has Override",
+    "inherit_only": "Inherit Only",
+    "add_manually": "Add Project Manually",
+    "reset_inherit": "Reset Inherit"
   }
 }

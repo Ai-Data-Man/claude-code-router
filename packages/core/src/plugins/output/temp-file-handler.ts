@@ -2,6 +2,7 @@ import { OutputHandler, OutputOptions } from './types';
 import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { extractSessionIdFromUserId } from '../../utils/router';
 
 /**
  * Temp file output handler configuration
@@ -72,12 +73,8 @@ export class TempFileOutputHandler implements OutputHandler {
    * Format: "user_..._session_<uuid>"
    */
   private extractSessionId(userId: string): string | null {
-    try {
-      const match = userId.match(/_session_([a-f0-9-]+)/i);
-      return match ? match[1] : null;
-    } catch {
-      return null;
-    }
+    const parsed = extractSessionIdFromUserId(userId);
+    return parsed.sessionId || null;
   }
 
   /**

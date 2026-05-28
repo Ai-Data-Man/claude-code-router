@@ -34,6 +34,52 @@ interface MessageCreateParamsBase {
 
 const enc = get_encoding("cl100k_base");
 
+export const extractSessionIdFromUserId = (
+  userId: unknown
+): { sessionId?: string; source?: "json" | "object" | "legacy" } => {
+  if (!userId) return {};
+
+  if (typeof userId === "object") {
+    const objectValue = userId as Record<string, any>;
+    if (typeof objectValue.session_id === "string" && objectValue.session_id) {
+      return { sessionId: objectValue.session_id, source: "object" };
+    }
+    if (typeof objectValue.metadata?.session_id === "string" && objectValue.metadata.session_id) {
+      return { sessionId: objectValue.metadata.session_id, source: "object" };
+    }
+    return {};
+  }
+
+  if (typeof userId !== "string") return {};
+
+  const trimmed = userId.trim();
+  if (!trimmed) return {};
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.session_id === "string" && parsed.session_id) {
+        return { sessionId: parsed.session_id, source: "json" };
+      }
+      if (typeof parsed.metadata?.session_id === "string" && parsed.metadata.session_id) {
+        return { sessionId: parsed.metadata.session_id, source: "json" };
+      }
+    }
+  } catch {}
+
+  const legacyMatch = trimmed.match(/_session_([a-f0-9-]+)/i);
+  if (legacyMatch) {
+    return { sessionId: legacyMatch[1], source: "legacy" };
+  }
+
+  const sessionFieldMatch = trimmed.match(/"session_id"\s*:\s*"([^"]+)"/i);
+  if (sessionFieldMatch) {
+    return { sessionId: sessionFieldMatch[1], source: "json" };
+  }
+
+  return {};
+};
+
 export const calculateTokenCount = (
   messages: MessageParam[],
   system: any,
@@ -92,9 +138,18 @@ const getProjectSpecificRouter = async (
   req: any,
   configService: ConfigService
 ) => {
+  req.log?.debug(
+    {
+      sessionId: req.sessionId,
+      metadataUserId: req.body?.metadata?.user_id,
+    },
+    "Resolving project specific router"
+  );
+
   // Check if there is project-specific configuration
   if (req.sessionId) {
-    const project = await searchProjectBySession(req.sessionId);
+    const project = await searchProjectBySession(req.sessionId, req.log);
+    req.log?.debug({ sessionId: req.sessionId, project }, "Resolved project folder from session");
     if (project) {
       const projectConfigPath = join(HOME_DIR, project, "config.json");
       const sessionConfigPath = join(
@@ -103,21 +158,35 @@ const getProjectSpecificRouter = async (
         `${req.sessionId}.json`
       );
 
+      req.log?.debug(
+        { sessionId: req.sessionId, project, sessionConfigPath, projectConfigPath },
+        "Attempting to load scoped router config files"
+      );
+
       // First try to read sessionConfig file
       try {
         const sessionConfig = JSON.parse(await readFile(sessionConfigPath, "utf8"));
         if (sessionConfig && sessionConfig.Router) {
+          req.log?.debug({ sessionId: req.sessionId, project, sessionConfigPath, router: sessionConfig.Router }, "Using session scoped router config");
           return sessionConfig.Router;
         }
-      } catch {}
+        req.log?.debug({ sessionId: req.sessionId, project, sessionConfigPath }, "Session scoped config loaded but Router missing");
+      } catch (error: any) {
+        req.log?.debug({ sessionId: req.sessionId, project, sessionConfigPath, error: error?.message }, "Failed to load session scoped config");
+      }
       try {
         const projectConfig = JSON.parse(await readFile(projectConfigPath, "utf8"));
         if (projectConfig && projectConfig.Router) {
+          req.log?.debug({ sessionId: req.sessionId, project, projectConfigPath, router: projectConfig.Router }, "Using project scoped router config");
           return projectConfig.Router;
         }
-      } catch {}
+        req.log?.debug({ sessionId: req.sessionId, project, projectConfigPath }, "Project scoped config loaded but Router missing");
+      } catch (error: any) {
+        req.log?.debug({ sessionId: req.sessionId, project, projectConfigPath, error: error?.message }, "Failed to load project scoped config");
+      }
     }
   }
+  req.log?.debug({ sessionId: req.sessionId }, "No scoped router config found; falling back to global router");
   return undefined; // Return undefined to use original configuration
 };
 
@@ -130,6 +199,15 @@ const getUseModel = async (
   const projectSpecificRouter = await getProjectSpecificRouter(req, configService);
   const providers = configService.get<any[]>("providers") || [];
   const Router = projectSpecificRouter || configService.get("Router");
+  req.log?.debug(
+    {
+      sessionId: req.sessionId,
+      projectSpecificRouter,
+      globalRouter: configService.get("Router"),
+      effectiveRouter: Router,
+    },
+    "Computed effective router configuration"
+  );
 
   if (req.body.model.includes(",")) {
     const [provider, model] = req.body.model.split(",");
@@ -217,13 +295,19 @@ export interface RouterFallbackConfig {
 
 export const router = async (req: any, _res: any, context: RouterContext) => {
   const { configService, event } = context;
-  // Parse sessionId from metadata.user_id
-  if (req.body.metadata?.user_id) {
-    const parts = req.body.metadata.user_id.split("_session_");
-    if (parts.length > 1) {
-      req.sessionId = parts[1];
-    }
+  const parsedSession = extractSessionIdFromUserId(req.body.metadata?.user_id);
+  if (parsedSession.sessionId) {
+    req.sessionId = parsedSession.sessionId;
   }
+  req.log?.debug(
+    {
+      metadataUserId: req.body.metadata?.user_id,
+      sessionId: req.sessionId,
+      hasSessionDelimiter: typeof req.body.metadata?.user_id === "string" ? req.body.metadata.user_id.includes("_session_") : false,
+      sessionIdSource: parsedSession.source,
+    },
+    "Parsed session id from request metadata"
+  );
   const lastMessageUsage = sessionUsageCache.get(req.sessionId);
   const { messages, system = [], tools }: MessageCreateParamsBase = req.body;
   const rewritePrompt = configService.get("REWRITE_SYSTEM_PROMPT");
@@ -283,6 +367,14 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
       const result = await getUseModel(req, tokenCount, configService, lastMessageUsage);
       model = result.model;
       req.scenarioType = result.scenarioType;
+      req.log?.debug(
+        {
+          sessionId: req.sessionId,
+          model,
+          scenarioType: req.scenarioType,
+        },
+        "Selected routed model"
+      );
     } else {
       // Custom router doesn't provide scenario type, default to 'default'
       req.scenarioType = 'default';
@@ -305,16 +397,20 @@ const sessionProjectCache = new LRUCache<string, string>({
 });
 
 export const searchProjectBySession = async (
-  sessionId: string
+  sessionId: string,
+  logger?: { debug?: (...args: any[]) => void; error?: (...args: any[]) => void }
 ): Promise<string | null> => {
   // Check cache first
   if (sessionProjectCache.has(sessionId)) {
     const result = sessionProjectCache.get(sessionId);
+    logger?.debug?.({ sessionId, cacheHit: true, cachedProject: result || null }, "Resolved project folder from session cache");
     if (!result || result === '') {
       return null;
     }
     return result;
   }
+
+  logger?.debug?.({ sessionId, cacheHit: false, claudeProjectsDir: CLAUDE_PROJECTS_DIR }, "Searching project folder by session id");
 
   try {
     const dir = await opendir(CLAUDE_PROJECTS_DIR);
@@ -326,6 +422,8 @@ export const searchProjectBySession = async (
         folderNames.push(dirent.name);
       }
     }
+
+    logger?.debug?.({ sessionId, claudeProjectsDir: CLAUDE_PROJECTS_DIR, folderCount: folderNames.length }, "Collected Claude project folders for session lookup");
 
     // Concurrently check each project folder for sessionId.jsonl file
     const checkPromises = folderNames.map(async (folderName) => {
@@ -350,14 +448,17 @@ export const searchProjectBySession = async (
       if (result) {
         // Cache the found result
         sessionProjectCache.set(sessionId, result);
+        logger?.debug?.({ sessionId, project: result }, "Found project folder containing session transcript");
         return result;
       }
     }
 
     // Cache not found result (null value means previously searched but not found)
     sessionProjectCache.set(sessionId, '');
+    logger?.debug?.({ sessionId, claudeProjectsDir: CLAUDE_PROJECTS_DIR }, "No project folder contains the requested session transcript");
     return null; // No matching project found
-  } catch (error) {
+  } catch (error: any) {
+    logger?.error?.({ sessionId, claudeProjectsDir: CLAUDE_PROJECTS_DIR, error: error?.message }, "Error searching for project by session");
     console.error("Error searching for project by session:", error);
     // Cache null result on error to avoid repeated errors
     sessionProjectCache.set(sessionId, '');

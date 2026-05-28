@@ -3,11 +3,18 @@ export interface ProviderTransformer {
   [key: string]: any; // Allow for model-specific transformers
 }
 
+export interface ProviderModel {
+  name: string;
+  enabled?: boolean;
+}
+
 export interface Provider {
   name: string;
   api_base_url: string;
   api_key: string;
-  models: string[];
+  models: Array<string | ProviderModel>;
+  enabled?: boolean;
+  models_path?: string;
   transformer?: ProviderTransformer;
 }
 
@@ -20,6 +27,46 @@ export interface RouterConfig {
     webSearch: string;
     image: string;
     custom?: any;
+}
+
+export interface ScopedRouterConfig extends Partial<RouterConfig> {
+  [key: string]: string | number | undefined;
+}
+
+export type ScopeType = 'global' | 'project' | 'session';
+export type ViewMode = 'effective' | 'override';
+
+export interface ProjectItem {
+  path: string;
+  label: string;
+  hasOverride: boolean;
+  lastActivityAt?: string;
+  source?: 'auto' | 'manual';
+}
+
+export interface SessionItem {
+  id: string;
+  projectPath: string;
+  lastActivityAt: string;
+  hasOverride: boolean;
+}
+
+export interface EffectiveFieldState<T = string | number> {
+  value: T;
+  source: string;
+  overridden: boolean;
+}
+
+export interface ScopedConfigState {
+  scope: ScopeType;
+  viewMode: ViewMode;
+  activeProjectPath: string;
+  activeSessionId: string;
+  projectItems: ProjectItem[];
+  sessionItems: SessionItem[];
+  projectRouter: ScopedRouterConfig;
+  sessionRouter: ScopedRouterConfig;
+  scopedAvailable: boolean;
 }
 
 export interface Transformer {

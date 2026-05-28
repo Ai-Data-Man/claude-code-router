@@ -19,13 +19,13 @@ import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
 import { ComboInput } from "@/components/ui/combo-input";
 import { api } from "@/lib/api";
-import type { Provider } from "@/types";
+import type { Provider, ProviderModel } from "@/types";
 
-interface ProviderType extends Provider {}
+type ProviderType = Provider;
 
 export function Providers() {
   const { t } = useTranslation();
-  const { config, setConfig } = useConfig();
+  const { config, setConfig, saveSharedProviders } = useConfig();
   const [editingProviderIndex, setEditingProviderIndex] = useState<number | null>(null);
   const [deletingProviderIndex, setDeletingProviderIndex] = useState<number | null>(null);
   const [hasFetchedModels, setHasFetchedModels] = useState<Record<number, boolean>>({});
@@ -39,7 +39,40 @@ export function Providers() {
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>("");
+  const [selectedProviderNames, setSelectedProviderNames] = useState<string[]>([]);
+  const [showDisabledProviders, setShowDisabledProviders] = useState(false);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [fetchedModelIds, setFetchedModelIds] = useState<string[]>([]);
   const comboInputRef = useRef<HTMLInputElement>(null);
+
+  const getModelNames = (models: Array<string | ProviderModel>): string[] =>
+    models.map((m) => (typeof m === 'string' ? m : m.name));
+
+  const inferModelsPath = (apiBaseUrl: string): string => {
+    try {
+      const parsedUrl = new URL(apiBaseUrl.replace(/\/+$/, ''));
+      return parsedUrl.pathname.endsWith('/models') ? parsedUrl.pathname : '/v1/models';
+    } catch {
+      return '/v1/models';
+    }
+  };
+
+  const [modelsPathInput, setModelsPathInput] = useState<string>("");
+
+  const fetchAvailableModels = async (provider: ProviderType) => {
+    if (!provider.api_base_url || !provider.api_key) return;
+    setIsFetchingModels(true);
+    try {
+      const modelIds = await api.fetchProviderModels(provider.api_base_url, provider.api_key, provider.models_path);
+      const existingNames = getModelNames(provider.models || []);
+      const unadded = modelIds.filter((id) => !existingNames.includes(id));
+      setFetchedModelIds(unadded);
+    } catch {
+      setFetchedModelIds([]);
+    } finally {
+      setIsFetchingModels(false);
+    }
+  };
 
   useEffect(() => {
     const fetchProviderTemplates = async () => {
@@ -92,9 +125,10 @@ export function Providers() {
 
 
   const handleAddProvider = () => {
-    const newProvider: ProviderType = { name: "", api_base_url: "", api_key: "", models: [] };
+    const newProvider: ProviderType = { name: "", api_base_url: "", api_key: "", models: [], models_path: '/v1/models' };
     setEditingProviderIndex(config.Providers.length);
     setEditingProviderData(newProvider);
+    setModelsPathInput('/v1/models');
     setIsNewProvider(true);
     // Reset API key visibility and error when adding new provider
     setShowApiKey(prev => ({
@@ -103,6 +137,7 @@ export function Providers() {
     }));
     setApiKeyError(null);
     setNameError(null);
+    setFetchedModelIds([]);
   };
 
   const handleEditProvider = (index: number) => {
@@ -111,6 +146,7 @@ export function Providers() {
     const provider = config.Providers[actualIndex];
     setEditingProviderIndex(actualIndex);
     setEditingProviderData(JSON.parse(JSON.stringify(provider))); // 深拷贝
+    setModelsPathInput(provider.models_path || inferModelsPath(provider.api_base_url || ''));
     setIsNewProvider(false);
     // Reset API key visibility and error when opening edit dialog
     setShowApiKey(prev => ({
@@ -119,9 +155,10 @@ export function Providers() {
     }));
     setApiKeyError(null);
     setNameError(null);
+    setFetchedModelIds([]);
   };
 
-  const handleSaveProvider = () => {
+  const handleSaveProvider = async () => {
     if (!editingProviderData) return;
     
     // Validate name
@@ -154,15 +191,19 @@ export function Providers() {
     // Clear errors if validation passes
     setApiKeyError(null);
     setNameError(null);
-    
+
     if (editingProviderIndex !== null && editingProviderData) {
+      const nextProvider = {
+        ...editingProviderData,
+        models_path: modelsPathInput.trim() || inferModelsPath(editingProviderData.api_base_url || ''),
+      };
       const newProviders = [...config.Providers];
       if (isNewProvider) {
-        newProviders.push(editingProviderData);
+        newProviders.push(nextProvider);
       } else {
-        newProviders[editingProviderIndex] = editingProviderData;
+        newProviders[editingProviderIndex] = nextProvider;
       }
-      setConfig({ ...config, Providers: newProviders });
+      await persistProviders(newProviders);
     }
     // Reset API key visibility for this provider
     if (editingProviderIndex !== null) {
@@ -197,6 +238,7 @@ export function Providers() {
     setIsNewProvider(false);
     setApiKeyError(null);
     setNameError(null);
+    setFetchedModelIds([]);
   };
 
   // Handle deletion by setting the correct index in the state
@@ -205,12 +247,12 @@ export function Providers() {
   };
 
   // Handle deletion by passing the filtered index to get the actual index in the original array
-  const handleRemoveProvider = (filteredIndex: number) => {
+  const handleRemoveProvider = async (filteredIndex: number) => {
     // Find the actual index in the original providers array
     const actualIndex = validProviders.indexOf(filteredProviders[filteredIndex]);
     const newProviders = [...config.Providers];
     newProviders.splice(actualIndex, 1);
-    setConfig({ ...config, Providers: newProviders });
+    await persistProviders(newProviders);
     setDeletingProviderIndex(null);
   };
 
@@ -498,24 +540,70 @@ export function Providers() {
 
   const editingProvider = editingProviderData || (editingProviderIndex !== null ? validProviders[editingProviderIndex] : null);
 
-  // Filter providers based on search term
+  // Persist providers through shared API
+  const persistProviders = async (nextProviders: ProviderType[]) => {
+    setConfig(prev => prev ? { ...prev, Providers: nextProviders } : prev);
+    await saveSharedProviders(nextProviders);
+  };
+
+  const toggleProviderEnabled = async (providerName: string, enabled: boolean) => {
+    const nextProviders = validProviders.map((provider) =>
+      provider.name === providerName ? { ...provider, enabled } : provider,
+    );
+    await persistProviders(nextProviders);
+  };
+
+  const bulkSetEnabled = async (enabled: boolean) => {
+    const nextProviders = validProviders.map((provider) =>
+      selectedProviderNames.includes(provider.name) ? { ...provider, enabled } : provider,
+    );
+    await persistProviders(nextProviders);
+    setSelectedProviderNames([]);
+  };
+
+  const duplicateProvider = async (providerName: string) => {
+    const source = validProviders.find((provider) => provider.name === providerName);
+    if (!source) return;
+    const nextName = `${source.name} Copy`;
+    await persistProviders([...validProviders, { ...structuredClone(source), name: nextName }]);
+  };
+
+  const toggleModelEnabled = async (providerName: string, modelName: string, enabled: boolean) => {
+    const nextProviders = validProviders.map((provider) => {
+      if (provider.name !== providerName) return provider;
+      return {
+        ...provider,
+        models: (provider.models || []).map((model) => {
+          if (typeof model === 'string') {
+            return model === modelName ? { name: model, enabled } : { name: model, enabled: true };
+          }
+          return model.name === modelName ? { ...model, enabled } : model;
+        }),
+      };
+    });
+    await persistProviders(nextProviders);
+  };
+
+  // Filter providers based on search term and disabled visibility
   const filteredProviders = validProviders.filter(provider => {
-    if (!searchTerm) return true;
-    const term = searchTerm.toLowerCase();
-    // Check provider name and URL
-    if (
-      (provider.name && provider.name.toLowerCase().includes(term)) ||
-      (provider.api_base_url && provider.api_base_url.toLowerCase().includes(term))
-    ) {
-      return true;
-    }
-    // Check models
-    if (provider.models && Array.isArray(provider.models)) {
-      return provider.models.some(model => 
-        model && model.toLowerCase().includes(term)
-      );
-    }
-    return false;
+    const matchesSearch = !searchTerm || (() => {
+      const term = searchTerm.toLowerCase();
+      if (
+        (provider.name && provider.name.toLowerCase().includes(term)) ||
+        (provider.api_base_url && provider.api_base_url.toLowerCase().includes(term))
+      ) {
+        return true;
+      }
+      if (provider.models && Array.isArray(provider.models)) {
+        return provider.models.some(model => {
+          const name = typeof model === 'string' ? model : model?.name;
+          return name && name.toLowerCase().includes(term);
+        });
+      }
+      return false;
+    })();
+    const matchesVisibility = showDisabledProviders || provider.enabled !== false;
+    return matchesSearch && matchesVisibility;
   });
 
   return (
@@ -546,9 +634,45 @@ export function Providers() {
           )}
         </div>
       </CardHeader>
-      <CardContent className="flex-grow overflow-y-auto p-4">
+      <CardContent className="flex-grow overflow-y-auto p-4 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant={showDisabledProviders ? "default" : "outline"}
+            size="sm"
+            onClick={() => setShowDisabledProviders(prev => !prev)}
+          >
+            {showDisabledProviders ? "隐藏已禁用" : "显示已禁用"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={selectedProviderNames.length === 0}
+            onClick={() => bulkSetEnabled(true)}
+          >
+            批量启用
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={selectedProviderNames.length === 0}
+            onClick={() => bulkSetEnabled(false)}
+          >
+            批量禁用
+          </Button>
+          {selectedProviderNames.length > 0 && (
+            <span className="text-sm text-gray-500">已选 {selectedProviderNames.length} 项</span>
+          )}
+        </div>
         <ProviderList
           providers={filteredProviders}
+          selectedProviderNames={selectedProviderNames}
+          onToggleSelect={(name) => {
+            setSelectedProviderNames(prev =>
+              prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
+            );
+          }}
+          onToggleEnabled={toggleProviderEnabled}
+          onDuplicate={duplicateProvider}
           onEdit={handleEditProvider}
           onRemove={handleSetDeletingProviderIndex}
         />
@@ -635,6 +759,15 @@ export function Providers() {
                 )}
               </div>
               <div className="space-y-2">
+                <Label htmlFor="models_path">模型列表路径</Label>
+                <Input
+                  id="models_path"
+                  value={modelsPathInput}
+                  onChange={(e) => setModelsPathInput(e.target.value)}
+                  placeholder="/v1/models"
+                />
+              </div>
+              <div className="space-y-2">
                 <Label htmlFor="models">{t("providers.models")}</Label>
                 <div className="space-y-2">
                   <div className="flex gap-2">
@@ -642,7 +775,7 @@ export function Providers() {
                       {hasFetchedModels[editingProviderIndex] ? (
                         <ComboInput
                           ref={comboInputRef}
-                          options={(editingProvider.models || []).map((model: string) => ({ label: model, value: model }))}
+                          options={(editingProvider.models || []).map((model: any) => ({ label: typeof model === 'string' ? model : model.name, value: typeof model === 'string' ? model : model.name }))}
                           value=""
                           onChange={() => {
                             // 只更新输入值，不添加模型
@@ -690,28 +823,74 @@ export function Providers() {
                     >
                       {t("providers.add_model")}
                     </Button>
-                    {/* <Button 
-                      onClick={() => editingProvider && fetchAvailableModels(editingProvider)}
-                      disabled={isFetchingModels}
+                    <Button
+                      onClick={() => void fetchAvailableModels({ ...editingProviderData!, models_path: modelsPathInput })}
+                      disabled={isFetchingModels || !editingProviderData?.api_base_url || !editingProviderData?.api_key}
                       variant="outline"
                     >
                       {isFetchingModels ? t("providers.fetching_models") : t("providers.fetch_available_models")}
-                    </Button> */}
+                    </Button>
                   </div>
                   <div className="flex flex-wrap gap-2 pt-2">
-                    {(editingProvider.models || []).map((model: string, modelIndex: number) => (
-                      <Badge key={modelIndex} variant="outline" className="font-normal flex items-center gap-1">
-                        {model}
-                        <button 
-                          type="button" 
+                    {(editingProviderData?.models || []).map((model: any, modelIndex: number) => {
+                      const modelName = typeof model === 'string' ? model : model.name;
+                      const modelEnabled = typeof model === 'string' ? true : model.enabled !== false;
+                      return (
+                      <Badge key={modelIndex} variant="outline" className={`font-normal flex items-center gap-1 ${!modelEnabled ? 'opacity-40 line-through' : ''}`}>
+                        {modelName}
+                        <button
+                          type="button"
+                          className="ml-1 rounded-full hover:bg-gray-200 text-xs"
+                          title={modelEnabled ? 'Disable model' : 'Enable model'}
+                          onClick={() => {
+                            if (!editingProviderData) return;
+                            const updatedModels = [...editingProviderData.models];
+                            updatedModels[modelIndex] = typeof updatedModels[modelIndex] === 'string'
+                              ? { name: updatedModels[modelIndex] as string, enabled: !modelEnabled }
+                              : { ...(updatedModels[modelIndex] as any), enabled: !modelEnabled };
+                            setEditingProviderData({ ...editingProviderData, models: updatedModels });
+                          }}
+                        >
+                          {modelEnabled ? '●' : '○'}
+                        </button>
+                        <button
+                          type="button"
                           className="ml-1 rounded-full hover:bg-gray-200"
                           onClick={() => editingProviderIndex !== null && handleRemoveModel(editingProviderIndex, modelIndex)}
                         >
                           <X className="h-3 w-3" />
                         </button>
                       </Badge>
-                    ))}
+                      );
+                    })}
                   </div>
+                  {fetchedModelIds.length > 0 && (
+                    <div className="space-y-2 pt-2 border-t mt-2">
+                      <Label className="text-sm text-muted-foreground">
+                        {t("providers.available_models_to_add")}
+                      </Label>
+                      <div className="flex flex-wrap gap-2">
+                        {fetchedModelIds.map((modelId) => (
+                          <Badge
+                            key={modelId}
+                            variant="outline"
+                            className="cursor-pointer hover:bg-accent transition-colors"
+                            onClick={() => {
+                              if (!editingProviderData) return;
+                              setEditingProviderData({
+                                ...editingProviderData,
+                                models: [...editingProviderData.models, { name: modelId, enabled: true }],
+                              });
+                              setFetchedModelIds((prev) => prev.filter((id) => id !== modelId));
+                            }}
+                          >
+                            <Plus className="h-3 w-3 mr-1" />
+                            {modelId}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
               
@@ -868,9 +1047,11 @@ export function Providers() {
                 <div className="space-y-2">
                   <Label>{t("providers.model_transformers")}</Label>
                   <div className="space-y-3">
-                    {(editingProvider.models || []).map((model: string, modelIndex: number) => (
+                    {(editingProvider.models || []).map((model: any, modelIndex: number) => {
+                      const modelName = typeof model === 'string' ? model : model.name;
+                      return (
                       <div key={modelIndex} className="border rounded-md p-3">
-                        <div className="font-medium text-sm mb-2">{model}</div>
+                        <div className="font-medium text-sm mb-2">{modelName}</div>
                         {/* Add new transformer */}
                         <div className="flex gap-2">
                           <div className="flex-1 flex gap-2">
@@ -882,7 +1063,7 @@ export function Providers() {
                               value=""
                               onChange={(value) => {
                                 if (editingProviderIndex !== null) {
-                                  handleModelTransformerChange(editingProviderIndex, model, value);
+                                  handleModelTransformerChange(editingProviderIndex, modelName, value);
                                 }
                               }}
                               placeholder={t("providers.select_transformer")}
@@ -892,10 +1073,10 @@ export function Providers() {
                         </div>
                         
                         {/* Display existing transformers */}
-                        {editingProvider.transformer?.[model]?.use && editingProvider.transformer[model].use.length > 0 && (
+                        {editingProvider.transformer?.[modelName]?.use && editingProvider.transformer[modelName].use.length > 0 && (
                           <div className="space-y-2 mt-2">
                             <div className="text-sm font-medium text-gray-700">{t("providers.selected_transformers")}</div>
-                            {editingProvider.transformer[model].use.map((transformer: string | (string | Record<string, unknown> | { max_tokens: number })[], transformerIndex: number) => (
+                            {editingProvider.transformer[modelName].use.map((transformer: string | (string | Record<string, unknown> | { max_tokens: number })[], transformerIndex: number) => (
                               <div key={transformerIndex} className="border rounded-md p-3">
                                 <div className="flex gap-2 items-center mb-2">
                                   <div className="flex-1 bg-gray-50 rounded p-2 text-sm">
@@ -906,7 +1087,7 @@ export function Providers() {
                                     size="icon"
                                     onClick={() => {
                                       if (editingProviderIndex !== null) {
-                                        removeModelTransformerAtIndex(editingProviderIndex, model, transformerIndex);
+                                        removeModelTransformerAtIndex(editingProviderIndex, modelName, transformerIndex);
                                       }
                                     }}
                                   >
@@ -954,7 +1135,7 @@ export function Providers() {
                                             const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
                                             const paramInput = modelParamInputs[key];
                                             if (paramInput && paramInput.name && paramInput.value) {
-                                              addModelTransformerParameter(editingProviderIndex, model, transformerIndex, paramInput.name, paramInput.value);
+                                              addModelTransformerParameter(editingProviderIndex, modelName, transformerIndex, paramInput.name, paramInput.value);
                                               setModelParamInputs(prev => ({
                                                 ...prev,
                                                 [key]: {name: "", value: ""}
@@ -998,7 +1179,7 @@ export function Providers() {
                                                 onClick={() => {
                                                   if (editingProviderIndex !== null) {
                                                     // We need a function to remove parameters from a specific transformer
-                                                    removeModelTransformerParameterAtIndex(editingProviderIndex, model, transformerIndex, key);
+                                                    removeModelTransformerParameterAtIndex(editingProviderIndex, modelName, transformerIndex, key);
                                                   }
                                                 }}
                                               >
@@ -1016,7 +1197,8 @@ export function Providers() {
                           </div>
                         )}
                       </div>
-                    ))}
+                    );
+                    })}
                   </div>
                 </div>
               )}

@@ -5,12 +5,11 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import { Transformers } from "@/components/Transformers";
 import { Providers } from "@/components/Providers";
 import { Router } from "@/components/Router";
-import { JsonEditor } from "@/components/JsonEditor";
 import { LogViewer } from "@/components/LogViewer";
 import { Button } from "@/components/ui/button";
 import { useConfig } from "@/components/ConfigProvider";
 import { api } from "@/lib/api";
-import { Settings, Languages, Save, RefreshCw, FileJson, CircleArrowUp, FileText, FileCog } from "lucide-react";
+import { Settings, Languages, Save, RefreshCw, CircleArrowUp, FileText, FileCog } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -31,9 +30,8 @@ import "@/styles/animations.css";
 function App() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { config, error } = useConfig();
+  const { config, error, scoped, saveSharedProviders } = useConfig();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isJsonEditorOpen, setIsJsonEditorOpen] = useState(false);
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
@@ -47,80 +45,54 @@ function App() {
   const hasAutoCheckedUpdate = useRef(false);
 
   const saveConfig = async () => {
-    // Handle case where config might be null or undefined
     if (!config) {
       setToast({ message: t('app.config_missing'), type: 'error' });
       return;
     }
-    
+
     try {
-      // Save to API
-      const response = await api.updateConfig(config);
-      // Show success message or handle as needed
-      console.log('Config saved successfully');
-      
-      // 根据响应信息进行提示
-      if (response && typeof response === 'object' && 'success' in response) {
-        const apiResponse = response as { success: boolean; message?: string };
-        if (apiResponse.success) {
-          setToast({ message: apiResponse.message || t('app.config_saved_success'), type: 'success' });
-        } else {
-          setToast({ message: apiResponse.message || t('app.config_saved_failed'), type: 'error' });
+      // Always save shared providers first
+      await saveSharedProviders(config.Providers || []);
+
+      // Then save global/scoped config
+      if (!scoped.scopedAvailable || scoped.scope === 'global') {
+        const response = await api.updateConfig(config);
+        if (!response) {
+          setToast({ message: t('app.config_saved_failed'), type: 'error' });
+          return;
         }
-      } else {
-        // 默认成功提示
-        setToast({ message: t('app.config_saved_success'), type: 'success' });
       }
+      // For project/session scope, the scoped router is already saved on each change
+      // through saveScopedRouter in ConfigProvider
+
+      setToast({ message: t('app.config_saved_success'), type: 'success' });
     } catch (error) {
       console.error('Failed to save config:', error);
-      // Handle error appropriately
       setToast({ message: t('app.config_saved_failed') + ': ' + (error as Error).message, type: 'error' });
     }
   };
 
   const saveConfigAndRestart = async () => {
-    // Handle case where config might be null or undefined
     if (!config) {
       setToast({ message: t('app.config_missing'), type: 'error' });
       return;
     }
-    
+
     try {
-      // Save to API
-      const response = await api.updateConfig(config);
-      
-      // Check if save was successful before restarting
-      let saveSuccessful = true;
-      if (response && typeof response === 'object' && 'success' in response) {
-        const apiResponse = response as { success: boolean; message?: string };
-        if (!apiResponse.success) {
-          saveSuccessful = false;
-          setToast({ message: apiResponse.message || t('app.config_saved_failed'), type: 'error' });
-        }
+      // Always save shared providers first
+      await saveSharedProviders(config.Providers || []);
+
+      // Then save based on current scope
+      if (!scoped.scopedAvailable || scoped.scope === 'global') {
+        await api.updateConfig(config);
       }
-      
-      // Only restart if save was successful
-      if (saveSuccessful) {
-        // Restart service
-        const response = await api.restartService();
-        
-        // Show success message or handle as needed
-        console.log('Config saved and service restarted successfully');
-        
-        // 根据响应信息进行提示
-        if (response && typeof response === 'object' && 'success' in response) {
-          const apiResponse = response as { success: boolean; message?: string };
-          if (apiResponse.success) {
-            setToast({ message: apiResponse.message || t('app.config_saved_restart_success'), type: 'success' });
-          }
-        } else {
-          // 默认成功提示
-          setToast({ message: t('app.config_saved_restart_success'), type: 'success' });
-        }
-      }
+      // For project/session scope, router changes are already saved per-field
+
+      // Restart the service
+      await api.restartService();
+      setToast({ message: t('app.config_saved_restart_success'), type: 'success' });
     } catch (error) {
       console.error('Failed to save config and restart:', error);
-      // Handle error appropriately
       setToast({ message: t('app.config_saved_restart_failed') + ': ' + (error as Error).message, type: 'error' });
     }
   };
@@ -288,16 +260,6 @@ function App() {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={() => setIsJsonEditorOpen(true)} className="transition-all-ease hover:scale-110">
-                <FileJson className="h-5 w-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{t('app.json_editor')}</p>
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" onClick={() => setIsLogViewerOpen(true)} className="transition-all-ease hover:scale-110">
                 <FileText className="h-5 w-5" />
               </Button>
@@ -385,21 +347,18 @@ function App() {
           <Providers />
         </div>
         <div className="flex w-2/5 flex-col gap-4">
-          <div className="h-3/5">
+          <div className="flex-1 overflow-hidden">
             <Router />
           </div>
-          <div className="flex-1 overflow-hidden">
-            <Transformers />
-          </div>
+          {!scoped.scopedAvailable && (
+            <div className="flex-1 overflow-hidden">
+              <Transformers />
+            </div>
+          )}
         </div>
       </main>
       <SettingsDialog isOpen={isSettingsOpen} onOpenChange={setIsSettingsOpen} />
-      <JsonEditor 
-        open={isJsonEditorOpen} 
-        onOpenChange={setIsJsonEditorOpen} 
-        showToast={(message, type) => setToast({ message, type })} 
-      />
-      <LogViewer 
+      <LogViewer
         open={isLogViewerOpen} 
         onOpenChange={setIsLogViewerOpen} 
         showToast={(message, type) => setToast({ message, type })} 

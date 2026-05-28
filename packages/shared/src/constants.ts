@@ -14,7 +14,9 @@ export const PID_FILE = path.join(HOME_DIR, '.claude-code-router.pid');
 export const REFERENCE_COUNT_FILE = path.join(os.tmpdir(), "claude-code-reference-count.txt");
 
 // Claude projects directory
-export const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
+// Can be overridden via CLAUDE_PROJECTS_DIR env var (for isolated dev environments)
+export const CLAUDE_PROJECTS_DIR = process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), ".claude", "projects");
+export const MANUAL_PROJECT_INDEX_FILE = path.join(HOME_DIR, "project-index.json");
 
 
 export interface DefaultConfig {

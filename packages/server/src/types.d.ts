@@ -49,6 +49,20 @@ declare module "@musistudio/llms" {
   export const calculateTokenCount: (messages: any[], system: any, tools: any[]) => number;
   export const searchProjectBySession: (sessionId: string) => Promise<string | null>;
 
+  export interface SharedModelConfig {
+    name: string;
+    enabled?: boolean;
+  }
+
+  export interface SharedProviderConfig {
+    name: string;
+    api_base_url: string;
+    api_key: string;
+    enabled?: boolean;
+    models: Array<string | SharedModelConfig>;
+    transformer?: Record<string, any>;
+  }
+
   // Export services
   export class ConfigService {
     constructor(options?: any);

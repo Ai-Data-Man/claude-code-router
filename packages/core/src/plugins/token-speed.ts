@@ -3,6 +3,7 @@ import { CCRPlugin, CCRPluginOptions } from './types';
 import { SSEParserTransform } from '../utils/sse';
 import { OutputHandlerConfig, OutputOptions, outputManager } from './output';
 import { ITokenizer, TokenizerConfig } from '../types/tokenizer';
+import { extractSessionIdFromUserId } from '../utils/router';
 
 /**
  * Token statistics interface
@@ -172,15 +173,8 @@ export const tokenSpeedPlugin: CCRPlugin = {
       const requestId = (request as any).id || Date.now().toString();
 
       // Extract session ID from request body metadata
-      let sessionId: string | undefined;
-      try {
-        const userId = (request.body as any)?.metadata?.user_id;
-        if (userId && typeof userId === 'string') {
-          const match = userId.match(/_session_([a-f0-9-]+)/i);
-          sessionId = match ? match[1] : undefined;
-        }
-      } catch (error) {
-      }
+      const parsedSession = extractSessionIdFromUserId((request.body as any)?.metadata?.user_id);
+      const sessionId = parsedSession.sessionId;
       if (!sessionId) return;
 
       // Get tokenizer for this specific request
