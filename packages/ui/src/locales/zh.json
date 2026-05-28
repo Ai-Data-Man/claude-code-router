@@ -46,7 +46,7 @@
     "title": "通用设置",
     "log": "启用日志",
     "log_level": "日志级别",
-    "log_max_size": "日志最大总大小",
+    "log_max_size": "日志最大保留大小 (如 200M, 1G)",
     "claude_path": "Claude 路径",
     "host": "主机",
     "port": "端口",

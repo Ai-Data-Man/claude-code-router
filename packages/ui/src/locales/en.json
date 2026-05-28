@@ -46,7 +46,7 @@
     "title": "General Settings",
     "log": "Enable Logging",
     "log_level": "Log Level",
-    "log_max_size": "Log Max Total Size",
+    "log_max_size": "Max log total size (e.g., 200M, 1G)",
     "claude_path": "Claude Path",
     "host": "Host",
     "port": "Port",

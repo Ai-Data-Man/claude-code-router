@@ -55,7 +55,6 @@ export interface ProjectIndexItem {
   hasOverride: boolean;
   lastActivityAt?: string;
   source?: "auto" | "manual";
-  emptyResponseRetry?: EmptyResponseRetryConfig;
 }
 
 export interface SessionIndexItem {
@@ -63,11 +62,11 @@ export interface SessionIndexItem {
   projectPath: string;
   lastActivityAt: string;
   hasOverride: boolean;
-  emptyResponseRetry?: EmptyResponseRetryConfig;
 }
 
 export interface ScopedConfigFile {
   Router?: ScopedRouterConfig;
+  emptyResponseRetry?: EmptyResponseRetryConfig;
 }
 
 export interface ScopedConfigSnapshot {
@@ -139,3 +138,4 @@ export function pickGlobalConfig(config: Record<string, any>): GlobalConfigPatch
     emptyResponseRetry: config.emptyResponseRetry || {},
   };
 }
+

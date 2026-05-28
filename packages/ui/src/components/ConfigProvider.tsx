@@ -129,6 +129,7 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
         const validConfig: Config = {
           LOG: typeof data.LOG === 'boolean' ? data.LOG : false,
           LOG_LEVEL: typeof data.LOG_LEVEL === 'string' ? data.LOG_LEVEL : 'debug',
+          LOG_MAX_SIZE: typeof data.LOG_MAX_SIZE === 'string' && data.LOG_MAX_SIZE ? data.LOG_MAX_SIZE : '200M',
           CLAUDE_PATH: typeof data.CLAUDE_PATH === 'string' ? data.CLAUDE_PATH : '',
           HOST: typeof data.HOST === 'string' ? data.HOST : '127.0.0.1',
           PORT: typeof data.PORT === 'number' ? data.PORT : 3456,
