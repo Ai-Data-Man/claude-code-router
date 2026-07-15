@@ -171,6 +171,10 @@ npm install -g @musistudio/claude-code-router
   ],
   "Router": {
     "default": "deepseek,deepseek-chat",
+    "sonnet": "deepseek,deepseek-chat",
+    "opus": "deepseek,deepseek-reasoner",
+    "fable": "openrouter,anthropic/claude-fable-5",
+    "haiku": "ollama,qwen2.5-coder:latest",
     "background": "ollama,qwen2.5-coder:latest",
     "think": "deepseek,deepseek-reasoner",
     "longContext": "openrouter,google/gemini-2.5-pro-preview",
@@ -414,6 +418,7 @@ Transformers 允许您修改请求和响应负载，以确保与不同提供商 
 `Router` 对象定义了在不同场景下使用哪个模型：
 
 -   `default`: 用于常规任务的默认模型。
+-   `sonnet`/`opus`/`fable`/`haiku`: Claude Code `/model` 别名路由。切换模型后 Claude Code 发送对应完整模型 ID（`claude-sonnet-5`、`claude-opus-4-8`、`claude-fable-5`、`claude-haiku-4-5-20251001`），CCR 据此路由。未配置时回落到下面的场景路由。
 -   `background`: 用于后台任务的模型。这可以是一个较小的本地模型以节省成本。
 -   `think`: 用于推理密集型任务（如计划模式）的模型。
 -   `longContext`: 用于处理长上下文（例如，> 60K 令牌）的模型。

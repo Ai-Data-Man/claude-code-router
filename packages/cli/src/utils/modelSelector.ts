@@ -27,6 +27,10 @@ interface Provider {
 
 interface RouterConfig {
   default: string;
+  sonnet?: string;
+  opus?: string;
+  fable?: string;
+  haiku?: string;
   background?: string;
   think?: string;
   longContext?: string;
@@ -120,7 +124,20 @@ function displayCurrentConfig(config: Config): void {
   
   console.log(`${BOLDCYAN}Default Model:${RESET}`);
   console.log(`  ${formatModel(config.Router.default)}\n`);
-  
+
+  const aliasKeys: { key: 'sonnet' | 'opus' | 'fable' | 'haiku'; label: string }[] = [
+    { key: 'sonnet', label: 'Sonnet Model' },
+    { key: 'opus', label: 'Opus Model' },
+    { key: 'fable', label: 'Fable Model' },
+    { key: 'haiku', label: 'Haiku Model' },
+  ];
+  for (const { key, label } of aliasKeys) {
+    if (config.Router[key]) {
+      console.log(`${BOLDCYAN}${label}:${RESET}`);
+      console.log(`  ${formatModel(config.Router[key])}\n`);
+    }
+  }
+
   if (config.Router.background) {
     console.log(`${BOLDCYAN}Background Model:${RESET}`);
     console.log(`  ${formatModel(config.Router.background)}\n`);
@@ -156,6 +173,10 @@ async function selectModelType() {
     message: `${BOLDYELLOW}Which model configuration do you want to update?${RESET}`,
     choices: [
       { name: 'Default Model', value: 'default' },
+      { name: 'Sonnet Model', value: 'sonnet' },
+      { name: 'Opus Model', value: 'opus' },
+      { name: 'Fable Model', value: 'fable' },
+      { name: 'Haiku Model', value: 'haiku' },
       { name: 'Background Model', value: 'background' },
       { name: 'Think Model', value: 'think' },
       { name: 'Long Context Model', value: 'longContext' },
@@ -310,6 +331,10 @@ async function addModelToExistingProvider(config: Config, providerName: string):
       message: `\n${BOLDYELLOW}Select configuration type:${RESET}`,
       choices: [
         { name: 'Default Model', value: 'default' },
+        { name: 'Sonnet Model', value: 'sonnet' },
+        { name: 'Opus Model', value: 'opus' },
+        { name: 'Fable Model', value: 'fable' },
+        { name: 'Haiku Model', value: 'haiku' },
         { name: 'Background Model', value: 'background' },
         { name: 'Think Model', value: 'think' },
         { name: 'Long Context Model', value: 'longContext' },
@@ -317,7 +342,7 @@ async function addModelToExistingProvider(config: Config, providerName: string):
         { name: 'Image Model', value: 'image' }
       ]
     }) as string;
-    
+
     return { providerName, modelName, modelType };
   }
   
@@ -414,6 +439,10 @@ async function addNewProvider(config: Config): Promise<ModelResult | null> {
       message: `\n${BOLDYELLOW}Select configuration type:${RESET}`,
       choices: [
         { name: 'Default Model', value: 'default' },
+        { name: 'Sonnet Model', value: 'sonnet' },
+        { name: 'Opus Model', value: 'opus' },
+        { name: 'Fable Model', value: 'fable' },
+        { name: 'Haiku Model', value: 'haiku' },
         { name: 'Background Model', value: 'background' },
         { name: 'Think Model', value: 'think' },
         { name: 'Long Context Model', value: 'longContext' },
@@ -421,7 +450,7 @@ async function addNewProvider(config: Config): Promise<ModelResult | null> {
         { name: 'Image Model', value: 'image' }
       ]
     }) as string;
-    
+
     return { providerName, modelName: selectedModel, modelType };
   }
   

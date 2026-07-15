@@ -18,6 +18,26 @@ Set the default model for all requests:
 }
 ```
 
+## Alias Routing (Claude Code `/model`)
+
+When you switch models in Claude Code via `/model sonnet|opus|fable|haiku`, Claude Code resolves the alias to a full model ID (e.g. `claude-sonnet-5`, `claude-opus-4-8`, `claude-fable-5`, `claude-haiku-4-5-20251001`) and sends it in the request. Configure these keys to route each alias to a specific model. Alias routing takes precedence over all scenario routing (background/think/webSearch/default), but is lower than an explicit sub-agent model tag.
+
+```json
+{
+  "Router": {
+    "default": "deepseek,deepseek-chat",
+    "sonnet": "deepseek,deepseek-chat",
+    "opus": "deepseek,deepseek-reasoner",
+    "fable": "openrouter,anthropic/claude-fable-5",
+    "haiku": "groq,llama-3.3-70b-versatile"
+  }
+}
+```
+
+> - Only matched when `req.body.model` contains `claude` and the corresponding keyword. Unconfigured aliases fall through silently to the legacy scenario logic below.
+> - `best` / `opusplan` / `sonnet[1m]` resolve to a concrete ID first, then match the corresponding alias — no extra configuration needed.
+> - Works with project-level and session-level Router overrides (shallow merge).
+
 ## Built-in Scenarios
 
 ### Background Tasks

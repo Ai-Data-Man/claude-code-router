@@ -46,6 +46,7 @@ The routing logic determines which model a request should be sent to:
 - **Default routing**: Uses `Router.default` configuration
 - **Project-level routing**: Checks `~/.claude/projects/<project-id>/claude-code-router.json`
 - **Custom routing**: Loads custom JavaScript router function via `CUSTOM_ROUTER_PATH`
+- **Alias routing**: Routes by Claude Code `/model` alias resolved to model ID — `sonnet`, `opus`, `fable`, `haiku` keys. Falls through silently when the matching key is not configured.
 - **Built-in scenario routing**:
   - `background`: Background tasks (typically lightweight models)
   - `think`: Thinking-intensive tasks (Plan Mode)

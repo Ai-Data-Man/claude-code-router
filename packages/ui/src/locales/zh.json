@@ -113,6 +113,10 @@
   "router": {
     "title": "路由",
     "default": "默认",
+    "sonnet": "Sonnet",
+    "opus": "Opus",
+    "fable": "Fable",
+    "haiku": "Haiku",
     "background": "后台",
     "think": "思考",
     "longContext": "长上下文",

@@ -64,6 +64,10 @@ const normalizeRouter = (router: any): RouterConfig => ({
   longContextThreshold: router?.longContextThreshold ?? 60000,
   webSearch: router?.webSearch ?? '',
   image: router?.image ?? '',
+  sonnet: router?.sonnet ?? '',
+  opus: router?.opus ?? '',
+  fable: router?.fable ?? '',
+  haiku: router?.haiku ?? '',
 });
 
 export function ConfigProvider({ children }: ConfigProviderProps) {
@@ -163,7 +167,7 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
             LOG: false, LOG_LEVEL: 'debug', CLAUDE_PATH: '', HOST: '127.0.0.1', PORT: 3456,
             APIKEY: '', API_TIMEOUT_MS: '600000', PROXY_URL: '', transformers: [], Providers: [],
             StatusLine: undefined,
-            Router: { default: '', background: '', think: '', longContext: '', longContextThreshold: 60000, webSearch: '', image: '' },
+            Router: { default: '', background: '', think: '', longContext: '', longContextThreshold: 60000, webSearch: '', image: '', sonnet: '', opus: '', fable: '', haiku: '' },
             CUSTOM_ROUTER_PATH: ''
           });
           setError(err as Error);

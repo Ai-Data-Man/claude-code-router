@@ -113,6 +113,10 @@
   "router": {
     "title": "Router",
     "default": "Default",
+    "sonnet": "Sonnet",
+    "opus": "Opus",
+    "fable": "Fable",
+    "haiku": "Haiku",
     "background": "Background",
     "think": "Think",
     "longContext": "Long Context",

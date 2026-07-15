@@ -15,6 +15,10 @@ import type { ScopedRouterConfig, RouterConfig, Provider, ProviderModel } from "
 
 const routeFields: { field: keyof RouterConfig; labelKey: string; isNumber?: boolean }[] = [
   { field: "default", labelKey: "router.default" },
+  { field: "sonnet", labelKey: "router.sonnet" },
+  { field: "opus", labelKey: "router.opus" },
+  { field: "fable", labelKey: "router.fable" },
+  { field: "haiku", labelKey: "router.haiku" },
   { field: "background", labelKey: "router.background" },
   { field: "think", labelKey: "router.think" },
   { field: "longContext", labelKey: "router.longContext" },

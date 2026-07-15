@@ -26,6 +26,10 @@ export interface RouterConfig {
     longContextThreshold: number;
     webSearch: string;
     image: string;
+    sonnet: string;
+    opus: string;
+    fable: string;
+    haiku: string;
     custom?: any;
 }
 

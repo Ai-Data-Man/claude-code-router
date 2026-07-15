@@ -251,6 +251,32 @@ const getUseModel = async (
       return { model: model[1], scenarioType: 'default' };
     }
   }
+
+  // 🆕 Alias-based routing: takes precedence over the legacy scenario routing
+  // (background/think/webSearch/default) but lower than an explicit sub-agent
+  // model tag above. Matches the full model ID Claude Code sends after resolving
+  // /model aliases (e.g. claude-sonnet-5, claude-opus-4-8, claude-fable-5,
+  // claude-haiku-4-5-20251001). Falls through silently when the matching Router
+  // key is not configured, so legacy logic is preserved (smooth upgrade).
+  // NOTE: the `includes('claude')` guard assumes Claude Code sends a full model
+  // ID. If a future client ever sends a bare alias (e.g. "sonnet"), widen this
+  // to `reqModel.includes('claude') || reqModel === keyword`.
+  const aliasMap: { keyword: string; key: 'fable' | 'opus' | 'sonnet' | 'haiku' }[] = [
+    { keyword: 'fable', key: 'fable' },
+    { keyword: 'opus', key: 'opus' },
+    { keyword: 'sonnet', key: 'sonnet' },
+    { keyword: 'haiku', key: 'haiku' },
+  ];
+  const reqModel = typeof req.body.model === 'string' ? req.body.model.toLowerCase() : '';
+  if (reqModel && reqModel.includes('claude')) {
+    for (const { keyword, key } of aliasMap) {
+      if (reqModel.includes(keyword) && Router?.[key]) {
+        req.log.info(`Using ${key} model for ${req.body.model}`);
+        return { model: Router[key], scenarioType: key };
+      }
+    }
+  }
+
   // Use the background model for any Claude Haiku variant
   if (
     req.body.model?.includes("claude") &&
@@ -282,7 +308,7 @@ export interface RouterContext {
   event?: any;
 }
 
-export type RouterScenarioType = 'default' | 'background' | 'think' | 'longContext' | 'webSearch';
+export type RouterScenarioType = 'default' | 'background' | 'think' | 'longContext' | 'webSearch' | 'sonnet' | 'opus' | 'fable' | 'haiku';
 
 export interface RouterFallbackConfig {
   default?: string[];
@@ -290,6 +316,10 @@ export interface RouterFallbackConfig {
   think?: string[];
   longContext?: string[];
   webSearch?: string[];
+  sonnet?: string[];
+  opus?: string[];
+  fable?: string[];
+  haiku?: string[];
 }
 
 export const router = async (req: any, _res: any, context: RouterContext) => {
