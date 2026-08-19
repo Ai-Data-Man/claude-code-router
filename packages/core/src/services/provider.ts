@@ -19,11 +19,25 @@ export class ProviderService {
 
   private initializeCustomProviders() {
     const providersConfig =
-      this.configService.get<ConfigProvider[]>("providers");
+      this.configService.get<ConfigProvider[]>("providers") ??
+      this.configService.get<ConfigProvider[]>("Providers");
     if (providersConfig && Array.isArray(providersConfig)) {
       this.initializeFromProvidersArray(providersConfig);
       return;
     }
+  }
+
+  /**
+   * Rebuild in-memory providers and model routes from the current config.
+   * Called after config reload so provider/transformer changes apply
+   * without a service restart. Reuses the same instance, so the
+   * fastify-decorated reference stays valid.
+   */
+  reloadFromConfig(): void {
+    this.providers.clear();
+    this.modelRoutes.clear();
+    this.initializeCustomProviders();
+    this.logger.info("ProviderService reloaded from config");
   }
 
   private initializeFromProvidersArray(providersConfig: ConfigProvider[]) {
@@ -39,44 +53,46 @@ export class ProviderService {
 
         const transformer: LLMProvider["transformer"] = {}
 
+        const resolveTransformerEntry = (entry: any): any => {
+          if (Array.isArray(entry) && typeof entry[0] === 'string') {
+            const Constructor = this.transformerService.getTransformer(entry[0]);
+            return Constructor
+              ? new (Constructor as TransformerConstructor)(entry[1])
+              : undefined;
+          }
+          if (typeof entry === 'string') {
+            const transformerInstance = this.transformerService.getTransformer(entry);
+            if (typeof transformerInstance === 'function') {
+              return new transformerInstance();
+            }
+            return transformerInstance;
+          }
+          // UI round-trip serializes transformer instances into plain objects
+          // (e.g. {"name":"Anthropic",...}); resolve by name instead of dropping.
+          if (entry && typeof entry === 'object' && typeof entry.name === 'string') {
+            const transformerInstance = this.transformerService.getTransformer(entry.name);
+            if (typeof transformerInstance === 'function') {
+              return new transformerInstance(entry.options);
+            }
+            return transformerInstance;
+          }
+          return undefined;
+        };
+
         if (providerConfig.transformer) {
           Object.keys(providerConfig.transformer).forEach(key => {
             if (key === 'use') {
               if (Array.isArray(providerConfig.transformer.use)) {
-                transformer.use = providerConfig.transformer.use.map((transformer) => {
-                  if (Array.isArray(transformer) && typeof transformer[0] === 'string') {
-                    const Constructor = this.transformerService.getTransformer(transformer[0]);
-                    if (Constructor) {
-                      return new (Constructor as TransformerConstructor)(transformer[1]);
-                    }
-                  }
-                  if (typeof transformer === 'string') {
-                    const transformerInstance = this.transformerService.getTransformer(transformer);
-                    if (typeof transformerInstance === 'function') {
-                      return new transformerInstance();
-                    }
-                    return transformerInstance;
-                  }
-                }).filter((transformer) => typeof transformer !== 'undefined');
+                transformer.use = providerConfig.transformer.use
+                  .map(resolveTransformerEntry)
+                  .filter((transformer: any) => typeof transformer !== 'undefined');
               }
             } else {
               if (Array.isArray(providerConfig.transformer[key]?.use)) {
                 transformer[key] = {
-                  use: providerConfig.transformer[key].use.map((transformer) => {
-                    if (Array.isArray(transformer) && typeof transformer[0] === 'string') {
-                      const Constructor = this.transformerService.getTransformer(transformer[0]);
-                      if (Constructor) {
-                        return new (Constructor as TransformerConstructor)(transformer[1]);
-                      }
-                    }
-                    if (typeof transformer === 'string') {
-                      const transformerInstance = this.transformerService.getTransformer(transformer);
-                      if (typeof transformerInstance === 'function') {
-                        return new transformerInstance();
-                      }
-                      return transformerInstance;
-                    }
-                  }).filter((transformer) => typeof transformer !== 'undefined')
+                  use: providerConfig.transformer[key].use
+                    .map(resolveTransformerEntry)
+                    .filter((transformer: any) => typeof transformer !== 'undefined')
                 }
               }
             }

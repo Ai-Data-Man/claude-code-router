@@ -181,6 +181,7 @@ export const createServer = async (config: any): Promise<any> => {
     const providers = Array.isArray(req.body?.providers) ? req.body.providers : [];
     const result = await saveSharedProviders(providers);
     (app as any)._server!.configService.reload();
+    (app as any)._server!.providerService.reloadFromConfig();
     return result;
   });
 
@@ -191,6 +192,7 @@ export const createServer = async (config: any): Promise<any> => {
   app.post("/api/config/global", async (req: any) => {
     const result = await saveGlobalScopedConfig(req.body || {});
     (app as any)._server!.configService.reload();
+    (app as any)._server!.providerService.reloadFromConfig();
     return result;
   });
 
@@ -270,6 +272,7 @@ export const createServer = async (config: any): Promise<any> => {
 
     await writeConfigFile(newConfig);
     (app as any)._server!.configService.reload();
+    (app as any)._server!.providerService.reloadFromConfig();
     return { success: true, message: "Config saved and applied successfully" };
   });
 
