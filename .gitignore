@@ -22,4 +22,6 @@ CLAUDE.local.md
 .trellis/workspace
 .trellis/tasks
 .trellis/.developer
-.trellis/.current-task
+.trellis/.current-task# local tooling
+reasonix.toml
+rebase-todo.sh
