@@ -188,39 +188,14 @@ class ApiClient {
   }
 
   // Fetch available model IDs from provider's models endpoint
+  // Goes through the local server proxy to avoid browser CORS restrictions
   async fetchProviderModels(apiBaseUrl: string, apiKey: string, modelsPath?: string): Promise<string[]> {
-    try {
-      const baseUrl = apiBaseUrl.replace(/\/+$/, '');
-      const parsedUrl = new URL(baseUrl);
-      const inferredPath = parsedUrl.pathname.endsWith('/models')
-        ? parsedUrl.pathname
-        : '/v1/models';
-      const targetPath = modelsPath?.trim() || inferredPath;
-      const normalizedPath = targetPath.startsWith('/') ? targetPath : `/${targetPath}`;
-      const modelsUrl = `${parsedUrl.origin}${normalizedPath}`;
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (apiKey) {
-        headers['Authorization'] = `Bearer ${apiKey}`;
-      }
-
-      const response = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(10000) });
-      if (!response.ok) return [];
-
-      const data = await response.json();
-      const items = Array.isArray(data.data)
-        ? data.data
-        : Array.isArray(data.models)
-          ? data.models
-          : Array.isArray(data)
-            ? data
-            : [];
-      return items
-        .map((item: any) => item.id || item.name || '')
-        .filter(Boolean)
-        .sort();
-    } catch {
-      return [];
-    }
+    const response = await this.post<{ models: string[] }>('/provider-models', {
+      api_base_url: apiBaseUrl,
+      api_key: apiKey,
+      models_path: modelsPath,
+    });
+    return response.models || [];
   }
 
 

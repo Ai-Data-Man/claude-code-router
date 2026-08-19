@@ -36,6 +36,7 @@ import {
 } from "@CCR/shared";
 import fastifyMultipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
+import { ProxyAgent } from "undici";
 
 export const createServer = async (config: any): Promise<any> => {
   const server = new Server(config);
@@ -101,6 +102,79 @@ export const createServer = async (config: any): Promise<any> => {
 
   app.get("/api/providers-shared", async () => {
     return { providers: await getSharedProviders() };
+  });
+
+  // Proxy for fetching a provider's model list from the server side,
+  // so the browser never makes a cross-origin request to the provider
+  app.post("/api/provider-models", async (req: any, reply: any) => {
+    const { api_base_url, api_key, models_path } = req.body || {};
+    if (!api_base_url) {
+      reply.status(400).send({ error: "api_base_url is required" });
+      return;
+    }
+
+    let modelsUrl: URL;
+    try {
+      modelsUrl = new URL(api_base_url.replace(/\/+$/, ""));
+    } catch {
+      reply.status(400).send({ error: "Invalid api_base_url" });
+      return;
+    }
+
+    const path = typeof models_path === "string" && models_path.trim()
+      ? models_path.trim()
+      : modelsUrl.pathname.endsWith("/models")
+        ? modelsUrl.pathname
+        : "/v1/models";
+    modelsUrl.pathname = path.startsWith("/") ? path : `/${path}`;
+
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (api_key) {
+      headers["Authorization"] = `Bearer ${api_key}`;
+    }
+
+    const fetchOptions: any = {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(15000),
+    };
+    const proxyUrl = config?.PROXY_URL || config?.proxyUrl;
+    if (proxyUrl) {
+      try {
+        fetchOptions.dispatcher = new ProxyAgent(new URL(proxyUrl).toString());
+      } catch {
+        req.log?.warn(`Invalid PROXY_URL configured, fetching models without proxy`);
+      }
+    }
+
+    try {
+      const response = await fetch(modelsUrl, fetchOptions);
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        reply.status(502).send({
+          error: `Provider returned ${response.status}`,
+          detail: errorText.slice(0, 500),
+        });
+        return;
+      }
+
+      const data: any = await response.json();
+      const items: any[] = Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data?.models)
+          ? data.models
+          : Array.isArray(data)
+            ? data
+            : [];
+      const models = items
+        .map((item) => item?.id || item?.name || "")
+        .filter(Boolean)
+        .sort();
+      return { models };
+    } catch (error: any) {
+      req.log?.error(`Failed to fetch provider models from ${modelsUrl.origin}: ${error?.message}`);
+      reply.status(502).send({ error: error?.message || "Failed to fetch provider models" });
+    }
   });
 
   app.post("/api/providers-shared", async (req: any) => {
