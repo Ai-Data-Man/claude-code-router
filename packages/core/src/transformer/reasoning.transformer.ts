@@ -60,7 +60,7 @@ export class ReasoningTransformer implements Transformer {
     if (!this.enable) return response;
     if (response.headers.get("Content-Type")?.includes("application/json")) {
       const jsonResponse = await response.json();
-      if (jsonResponse.choices[0]?.message.reasoning_content) {
+      if (jsonResponse.choices?.[0]?.message?.reasoning_content) {
         jsonResponse.thinking = {
           content: jsonResponse.choices[0]?.message.reasoning_content
         }
@@ -119,6 +119,13 @@ export class ReasoningTransformer implements Transformer {
             if (line.startsWith("data: ") && line.trim() !== "data: [DONE]") {
               try {
                 const data = JSON.parse(line.slice(6));
+                // Anthropic-native SSE events (content_block_delta etc.) have no
+                // choices; pass them through untouched. Emit the blank line the
+                // line-splitting above stripped, so SSE frame boundaries survive.
+                if (!data.choices) {
+                  controller.enqueue(encoder.encode(line + "\n\n"));
+                  return;
+                }
                 // Extract reasoning_content from delta
                 if (data.choices?.[0]?.delta?.reasoning_content) {
                   context.appendReasoningContent(

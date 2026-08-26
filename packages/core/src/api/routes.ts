@@ -335,8 +335,11 @@ async function sendRequestToProvider(
 ) {
   const url = config.url || new URL(provider.baseUrl);
 
-  // Handle authentication in passthrough mode
-  if (bypass && typeof transformer.auth === "function") {
+  // Handle authentication. Runs for the passthrough path and for
+  // anthropic-native endpoints: AnthropicTransformer.auth also converts
+  // unified-format tools back to the flat {name, description, input_schema}
+  // shape before the body leaves for an anthropic upstream.
+  if (typeof transformer.auth === "function") {
     const auth = await transformer.auth(requestBody, provider);
     if (auth.body) {
       requestBody = auth.body;

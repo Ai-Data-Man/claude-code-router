@@ -123,6 +123,14 @@ Examples:
               try {
                 const data = JSON.parse(line.slice(6));
 
+                // Anthropic-native SSE events have no choices; pass through.
+                // Emit the blank line the line-splitting above stripped, so SSE
+                // frame boundaries survive.
+                if (!data.choices) {
+                  controller.enqueue(encoder.encode(line + "\n\n"));
+                  return;
+                }
+
                 // Check if delta contains XML tool calls in content
                 if (data.choices[0]?.delta?.content && hasXmlToolCalls(data.choices[0].delta.content)) {
                   const content = data.choices[0].delta.content;

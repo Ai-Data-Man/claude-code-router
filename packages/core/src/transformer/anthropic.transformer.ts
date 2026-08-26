@@ -36,6 +36,13 @@ export class AnthropicTransformer implements Transformer {
       headers["authorization"] = undefined;
     }
 
+    // The transformer chain runs on the unified format, so tools may have
+    // been converted to nested {type, function} form. Restore the flat
+    // Anthropic tool shape the upstream anthropic endpoint expects.
+    if (Array.isArray(request.tools)) {
+      request.tools = this.convertUnifiedToolsToAnthropic(request.tools);
+    }
+
     return {
       body: request,
       config: {
@@ -212,34 +219,13 @@ export class AnthropicTransformer implements Transformer {
     response: Response,
     context?: TransformerContext
   ): Promise<Response> {
-    const isStream = response.headers
-      .get("Content-Type")
-      ?.includes("text/event-stream");
-    if (isStream) {
-      if (!response.body) {
-        throw new Error("Stream response body is null");
-      }
-      const convertedStream = await this.convertOpenAIStreamToAnthropic(
-        response.body,
-        context!
-      );
-      return new Response(convertedStream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
-      });
-    } else {
-      const data = (await response.json()) as any;
-      const anthropicResponse = this.convertOpenAIResponseToAnthropic(
-        data,
-        context!
-      );
-      return new Response(JSON.stringify(anthropicResponse), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    // AnthropicTransformer targets anthropic-native upstream endpoints, so
+    // the response is already in the Anthropic format Claude Code expects.
+    // Converters like convertOpenAIStreamToAnthropic exist for OpenAI-shaped
+    // upstreams; feeding a native anthropic response through them corrupts it
+    // (e.g. the JSON path dereferences `choices` and throws a 500). Pass the
+    // response through unchanged.
+    return response;
   }
 
   private convertAnthropicToolsToUnified(tools: any[]): UnifiedTool[] {
@@ -251,6 +237,27 @@ export class AnthropicTransformer implements Transformer {
         parameters: tool.input_schema,
       },
     }));
+  }
+
+  /**
+   * Convert unified-format tools back to the Anthropic format expected by
+   * anthropic-native upstream endpoints. AnthropicTransformer targets an
+   * anthropic gateway, so the outgoing body must carry flat
+   * `{name, description, input_schema}` tools. Emitting nested
+   * `{type, function: {name, parameters}}` tools makes anthropic-native
+   * relays drop the name and the upstream rejects the request with 400/422.
+   */
+  private convertUnifiedToolsToAnthropic(tools: any[]): any[] {
+    return tools.map((tool) => {
+      if (tool?.function) {
+        return {
+          name: tool.function.name,
+          description: tool.function.description,
+          input_schema: tool.function.parameters,
+        };
+      }
+      return tool;
+    });
   }
 
   private async convertOpenAIStreamToAnthropic(
